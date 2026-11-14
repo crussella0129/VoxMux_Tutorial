@@ -37,16 +37,7 @@ Read this once now and come back to it as needed.
 ## Step 0: set up
 
 1. In the repo root, make a folder named `my_build` and move into it in your terminal.
-2. Optional but recommended: make and activate a virtual environment so the libraries stay out of your global Python.
-
-   ```bash
-   python -m venv .venv
-   ```
-
-   ```bash
-   .venv\Scripts\Activate.ps1
-   ```
-
+2. Use your normal global Python for this exercise. All three libraries are already installed and tested there (see Step 1). A virtual environment is good practice in general, but here it would mean reinstalling several gigabytes of PyTorch and redoing the llama.cpp setup for no gain.
 3. Confirm the window toolkit is there. It ships with Python, so there is nothing to install. This should open a small test window:
 
    ```bash
@@ -61,16 +52,35 @@ Make a file named `requirements.txt`. It is plain text, one library name per lin
 2. `torch`: PyTorch.
 3. `transformers`: Hugging Face's library that loads safetensors models and tokenizers on top of PyTorch.
 
-Install them:
+On most machines you would now run `pip install -r requirements.txt`. **On this machine, do not: everything is already installed and verified.** Running it would do no harm, but there is nothing for it to do. Check with:
 
 ```bash
-pip install -r requirements.txt
+python -c "import llama_cpp, torch, transformers; print(llama_cpp.__version__, torch.__version__, transformers.__version__)"
 ```
 
-Two things to know on this machine:
+You should see `0.3.36`, `2.6.0+cu124`, and `5.12.1`.
 
-- Plain `pip install torch` gives you a CPU-only build on Windows. For your RTX card, use the install command from pytorch.org for your CUDA version instead.
-- Your GGUF files in `~/models` use the `qwen35` architecture, and the `llama-cpp-python` 0.3.16 that is installed globally is too old to read them (it fails with "unknown model architecture"). Upgrade it, or test with an older, smaller GGUF.
+#### How this machine was set up (for when you need to redo it)
+
+Plain `pip install` does the wrong thing for two of the three libraries on Windows, so this is what was actually done:
+
+- **torch** from PyPI is CPU-only on Windows. The GPU build comes from PyTorch's own index (the command is on pytorch.org; yours is the CUDA 12.4 build).
+- **llama-cpp-python** has no ready-made Windows build on PyPI, so plain `pip install` tries to compile it from source. The project publishes ready-made GPU builds on its own index instead:
+
+  ```bash
+  pip install --only-binary=:all: llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+  ```
+
+- That GPU build needs three NVIDIA runtime files (`cudart64_12.dll`, `cublas64_12.dll`, `cublasLt64_12.dll`) and does not ship them. Without them, `import llama_cpp` fails with "Failed to load shared library ... llama.dll (or one of its dependencies)". PyTorch ships the same three files, so they were copied from `site-packages\torch\lib` into `site-packages\llama_cpp\lib`. If you ever reinstall `llama-cpp-python`, copy them again. (Installing NVIDIA's CUDA Toolkit 12 is the other fix.)
+
+#### Models to test with
+
+Two small models were copied from the NAS into `C:\models` and both were run through the finished app:
+
+| Backend | Path | Size |
+| --- | --- | --- |
+| llama.cpp | `C:\models\Qwen3.5-0.8B-Q8_0.gguf` (a file) | 0.8 GB |
+| PyTorch | `C:\models\Qwen--Qwen3.5-2B` (a folder) | 4.3 GB |
 
 ## Step 2: `backends.py`
 
@@ -105,7 +115,8 @@ It has two methods.
 `messages` is a list of dictionaries. Each dictionary has two keys, `"role"` and `"content"`, both with string values. The role is `"user"` or `"assistant"`. This is the same shape every chat API uses.
 
 1. Call the method `create_chat_completion` on `self.llm` and store what comes back in a variable named `response`. Pass two keyword arguments: `messages` set to the `messages` parameter, and `max_tokens` set to `MAX_NEW_TOKENS`.
-2. `response` is a dictionary nested several levels deep. The reply text lives at: key `"choices"`, then index `0` of that list, then key `"message"`, then key `"content"`. Chain four sets of square brackets to reach it and `return` the result.
+2. `response` is a dictionary nested several levels deep. The reply text lives at: key `"choices"`, then index `0` of that list, then key `"message"`, then key `"content"`. Chain four sets of square brackets to reach it and store it in a variable named `reply`.
+3. `return` the result of calling `.strip()` on `reply`. Models often pad their answer with blank lines; `.strip()` removes whitespace from both ends of a string.
 
 ### 2.3 The class `TransformersBackend`
 
@@ -132,7 +143,8 @@ Here `model_path` is a **folder**, not a file. The folder holds `config.json`, t
 4. `generate` hands back the prompt *and* the reply as one long sequence of token numbers, so you need to cut the prompt off the front. Leave a comment explaining that. Then:
    - Get the prompt length: index `inputs` with the key `"input_ids"`, read its `.shape` attribute, and take index `1` of that. (Shape is rows by columns; there is one row, and the column count is the number of prompt tokens.) Store it as `prompt_length`.
    - Take the first (only) row of `output` with index `0`, then *slice* it from `prompt_length` to the end. A slice is square brackets with a colon: a start value, then a colon, then nothing. Store it as `new_tokens`.
-5. Call `decode` on `self.tokenizer` with `new_tokens` as the positional argument and the keyword argument `skip_special_tokens` set to `True`. `return` what it gives you.
+5. Call `decode` on `self.tokenizer` with `new_tokens` as the positional argument and the keyword argument `skip_special_tokens` set to `True`. Store the result as `reply`.
+6. `return` the result of calling `.strip()` on `reply`, same as in the other class.
 
 ### 2.4 The function `load_backend`
 
@@ -140,7 +152,7 @@ Back at zero indentation (outside both classes), define a function named `load_b
 
 1. If `kind` equals the string `"llama_cpp"` (equality is two equals signs), `return` a new `LlamaCppBackend` built with `model_path`.
 2. If `kind` equals the string `"pytorch"`, `return` a new `TransformersBackend` built with `model_path`.
-3. If neither matched, `raise` a `ValueError` whose message is an f-string that includes `kind`. Because each branch above returns, you can write plain `if`s with no `else`: reaching this line already means nothing matched.
+3. If neither matched, `raise` a `ValueError` whose message is an f-string reading `Unknown backend: ` followed by `kind` in braces. Because each branch above returns, you can write plain `if`s with no `else`: reaching this line already means nothing matched.
 
 ### 2.5 Checkpoint: test it without a window
 
@@ -150,7 +162,9 @@ From inside `my_build/`, start the Python prompt by running `python` with no arg
 2. Call it with the kind string and the full path to a model you have, and store the result in a variable. Put an `r` before the opening quote of a Windows path so the backslashes are taken literally.
 3. Call `.chat` on that variable. The argument is a list containing one dictionary, with `"role"` set to `"user"` and `"content"` set to a question.
 
-If a sentence comes back, this file is done. Do this for both kinds if you have both kinds of model.
+If a sentence comes back, this file is done. Do it once for each kind, using the two model paths from Step 1.
+
+The PyTorch backend prints several lines to the terminal while it loads and generates (a "fast path is not available" notice, some `[ERROR] ... not documented` lines, and "Setting `pad_token_id`"). They come from the transformers library, they are harmless, and the answer key prints them too. Loading the PyTorch model takes about 25 seconds; the GGUF takes about 2.
 
 ## Step 3: `app.py`
 
@@ -171,7 +185,7 @@ Before you start, understand the one hard idea in this file. Loading a model and
 
 ### 3.2 The class `ChatApp` and its `__init__`
 
-Define a class named `ChatApp`.
+Define a class named `ChatApp`. No docstring is needed on this class or its methods. Leave one blank line between methods and two blank lines between top-level classes and functions; that is the standard Python layout.
 
 **Method `__init__`**, parameters: `self` and `root`. `root` is the main window object, which `main` will create and pass in.
 
@@ -234,7 +248,9 @@ Parameters: just `self`. Runs when the Browse button is clicked.
 3. In the `else`, call `filedialog.askdirectory` with no arguments and store the result in `path`. Leave a comment above the `if` on why the two differ: a GGUF model is one file, a safetensors model is a whole folder.
 4. Both dialogs return an empty string if the user cancels. An empty string counts as false, so write `if path:` and inside it:
    - Store `path` as `self.model_path`.
-   - Update the status label: call `.config` on `self.status` with `text` set to an f-string reading `Selected:` followed by the path.
+   - Update the status label: call `.config` on `self.status` with `text` set to an f-string reading `Selected:`, a space, then `path` in braces.
+
+From here on, "set the status text to X" always means this same call: `.config` on `self.status` with `text` set to X. And wherever a status message has a label like `Ready:` or `Error:`, put one space after the colon.
 
 ### 3.5 Method `load_model`
 
@@ -251,7 +267,7 @@ Parameters: `self`, and `event` with a default value of `None`.
 
 Why the default? This method gets called two ways. The Send button calls it with no arguments. The Enter key binding calls it with one argument, an event object describing the keypress. A default lets one method serve both. You never use `event`; it just has to be accepted.
 
-1. Read the entry box with `.get()`, chain `.strip()` onto that to remove spaces from both ends, and store the result as `text`.
+1. Read the entry box by calling `.get()` on `self.entry`, chain `.strip()` onto that to remove spaces from both ends, and store the result as `text`.
 2. Guard: if `text` is empty, **or** `self.backend` is `None`, **or** `self.busy` is true, `return` early. Use `not text` for the first test, `is None` for the second, and join the three with the word `or`.
 3. Clear the entry box: call `.delete` on `self.entry` with the integer `0` and the string `"end"`.
 4. Add the user's message to the conversation: call `.append` on `self.messages`, passing a dictionary with `"role"` set to `"user"` and `"content"` set to `text`.
@@ -363,7 +379,9 @@ Check each of these:
 | The window freezes while loading | You called the worker method directly instead of handing it to `start_worker`. |
 | The model loads but the status stays on "Loading model..." | `poll_results` is not re-arming: the `.after` line is missing or indented into the `while` loop. |
 | "Error: Unknown backend: ..." | A radio button's `value` does not match the strings in `load_backend`. |
-| "Error: Failed to load model from file" | `llama-cpp-python` is too old for that GGUF's architecture, or the file is not a GGUF. |
+| "Error: Failed to load model from file" | `llama-cpp-python` is too old for that GGUF's architecture, or the file is not a chat model (the `mmproj-*.gguf` files are not). |
+| "Error: Failed to load shared library ... llama.dll" | The three NVIDIA runtime files are missing from `site-packages\llama_cpp\lib`. See Step 1. |
+| Red `[ERROR] ... not documented` lines in the terminal with the PyTorch backend | Harmless noise from transformers. If the status line says "Ready", it worked. |
 | The PyTorch reply repeats your whole prompt back | The slice in `TransformersBackend.chat` is missing or starts at the wrong place. |
 | `ModuleNotFoundError: No module named 'backends'` | You ran `python app.py` from a different folder than the one holding both files. |
 

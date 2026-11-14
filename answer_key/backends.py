@@ -29,7 +29,8 @@ class LlamaCppBackend:
             messages=messages,
             max_tokens=MAX_NEW_TOKENS,
         )
-        return response["choices"][0]["message"]["content"]
+        reply = response["choices"][0]["message"]["content"]
+        return reply.strip()
 
 
 class TransformersBackend:
@@ -63,7 +64,8 @@ class TransformersBackend:
         # prompt off the front and decode only what the model added.
         prompt_length = inputs["input_ids"].shape[1]
         new_tokens = output[0][prompt_length:]
-        return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+        reply = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+        return reply.strip()
 
 
 def load_backend(kind, model_path):
