@@ -101,7 +101,7 @@ The list has no shell in the way, so nothing needs quoting. Each library gets it
    - `STEPS`: a list of three lists, written across several lines with one inner list per line and a trailing comma after each. Each inner list is the rest of one pip command:
      - First, all on one line: `"torch"`, `"--index-url"`, `"https://download.pytorch.org/whl/cu124"`. `--index-url` replaces PyPI with PyTorch's index.
      - Second: just `"transformers>=5"`. Inside a Python string the `>` is only a character, so no extra quoting is needed.
-     - Third: four strings, too long for one line. Open the bracket, put one string per line indented one more level, each followed by a comma, then close the bracket on its own line followed by a comma. The strings are `"--only-binary=llama-cpp-python"`, `"llama-cpp-python==0.3.36"`, `"--extra-index-url"`, and `"https://abetlen.github.io/llama-cpp-python/whl/cu124"`. `--extra-index-url` adds this index alongside PyPI rather than replacing it. `==0.3.36` pins that exact version: it is the one the app was tested with, and the next one, 0.3.37, crashes on this machine's processor (see "When it does not work").
+     - Third: four strings, too long for one line. Open the bracket, put one string per line indented one more level, each followed by a comma, then close the bracket on its own line followed by a comma. The strings are `"--only-binary=llama-cpp-python"`, `"llama-cpp-python==0.3.36"`, `"--extra-index-url"`, and `"https://abetlen.github.io/llama-cpp-python/whl/cu124"`. `--extra-index-url` adds this index alongside PyPI rather than replacing it. `==0.3.36` pins that exact version: it is the one the app was tested with, and the next one, 0.3.37, crashed on the test machine's processor (see "When it does not work").
    - `CUDA_FILES`: a list of three strings, `"cudart64_12.dll"`, `"cublas64_12.dll"`, `"cublasLt64_12.dll"`.
    - `CHECK`: a string of Python code that step 1.2.4 runs as its own small program. It is too long for one line, so open a parenthesis after the `=`, put one piece of string per line, and close the parenthesis on its own line. Put no commas between the pieces: Python joins strings that sit next to each other into one. The whole string, once joined, must read `import tkinter, llama_cpp, torch, transformers; print(llama_cpp.__version__, torch.__version__, transformers.__version__, 'cuda:', torch.cuda.is_available(), 'llama gpu:', llama_cpp.llama_supports_gpu_offload())`. Break it after the `; `, after `transformers.__version__, ` and after `torch.cuda.is_available(), `. Keep each piece's trailing space, or the words run together when the pieces are joined. The labels inside it, `'cuda:'` and `'llama gpu:'`, use single quotes because the pieces themselves are in double quotes. A double quote there would end the string early.
 
@@ -146,22 +146,35 @@ It ends with a few `ggml_cuda_init` lines naming your graphics card, then three 
 
 ### 1.4 Models to test with
 
-Copy one model of each kind from the NAS into `C:\models`:
+Download one model of each kind from Hugging Face. `install.py` has already installed the `hf` download command, which comes with transformers. None of these models needs an account. Keep models outside the repo; these commands put them in `C:\models`, and any folder works.
+
+A small GGUF file for llama.cpp:
 
 ```bash
-robocopy \\nas\models\gguf C:\models Qwen3.5-0.8B-Q8_0.gguf
+hf download unsloth/Qwen3.5-0.8B-GGUF Qwen3.5-0.8B-Q8_0.gguf --local-dir C:\models
 ```
 
+A folder of safetensors weights for PyTorch:
+
 ```bash
-robocopy \\nas\models\safetensors\Qwen--Qwen3.5-2B C:\models\Qwen--Qwen3.5-2B /E
+hf download Qwen/Qwen3.5-2B --local-dir C:\models\Qwen3.5-2B
+```
+
+A larger GGUF file, for thinking mode and later for tools:
+
+```bash
+hf download unsloth/Qwen3.5-4B-GGUF Qwen3.5-4B-Q8_0.gguf --local-dir C:\models
 ```
 
 | Backend | Path | Size |
 | --- | --- | --- |
 | llama.cpp | `C:\models\Qwen3.5-0.8B-Q8_0.gguf` (a file) | 0.8 GB |
-| PyTorch | `C:\models\Qwen--Qwen3.5-2B` (a folder) | 4.3 GB |
+| PyTorch | `C:\models\Qwen3.5-2B` (a folder) | 4.5 GB |
+| llama.cpp | `C:\models\Qwen3.5-4B-Q8_0.gguf` (a file) | 4.5 GB |
 
-For thinking mode, and later for tools, also try `C:\models\Newq-Q8_0.gguf` (4.6 GB), which is already on your machine. The two small models above are fine for chatting but tend to think for ever without answering.
+The two small models are fine for chatting but tend to think for ever without answering. Use the 4B model whenever a step asks for it.
+
+These models fit an 11 GB graphics card. The first two are the exact files this recipe was tested with. The 4B tests used a different Q8 build of Qwen3.5 4B, so the file above should behave the same way but has not itself been run.
 
 ## Step 2: `requirements.txt`
 
@@ -739,7 +752,7 @@ Check each of these, once per backend, using the models from step 1.4:
 6. A second message gets an answer that shows the model remembers the first. Tell it your name in the first message and ask for it in the second.
 7. Type "Always answer in French." in the System prompt box and ask a question. The answer should come in French (the smallest models do not always obey).
 8. Set the temperature to 0 and ask "Name one fruit. Reply with one word." twice, each time after loading the model again. The answer should be the same both times.
-9. Click Thinking instructions..., change the text, and click Save; the window closes. Tick Thinking mode and ask "What is 17 * 23?" with the 4.6 GB model. You should see its reasoning, then `[end of thinking]`, then the answer.
+9. Click Thinking instructions..., change the text, and click Save; the window closes. Tick Thinking mode and ask "What is 17 * 23?" with the 4B model. You should see its reasoning, then `[end of thinking]`, then the answer.
 10. Loading a bad path shows "Error: ..." in the status line instead of crashing.
 
 ## When it does not work
@@ -759,9 +772,9 @@ Check each of these, once per backend, using the models from step 1.4:
 | The model loads but the status stays on "Loading model..." | `poll_results` is not re-arming: the `.after` line is missing or indented into the `while` loop. | `[4.13]` |
 | "Error: Unknown backend: ..." | A radio button's `value` does not match the strings in `load_backend`. | `[4.4.1]`, `[3.5]` |
 | The model seems to load, but the status stays on "Loading model..." and the terminal shows `AttributeError: '...Backend' object has no attribute 'context_size'` | `__init__` never stores `self.context_size`, so `poll_results` fails when it reads it and stops checking the queue. | `[3.3.1]`, `[3.4.1]`, `[4.13]` |
-| "Error: Failed to load model from file" | The file is not a chat model. In your models folder, the files whose names start with `mmproj-` are add-ons for image input, not models. | the file you picked |
+| "Error: Failed to load model from file" | The file is not a chat model. Files whose names start with `mmproj-` are add-ons for image input, not models. | the file you picked |
 | Pressing Send does nothing | No model is loaded yet, or a reply is still being written. | `[4.9]` |
-| Loading a `.gguf` file shows "Error: [WinError -1073741795] Windows Error 0xc000001d", or the app closes with no message | That is Windows' "illegal instruction" error: the llama-cpp-python build uses a processor instruction your CPU does not have. 0.3.37 does this on this machine, and 0.3.36 does not. Check that the llama-cpp-python line in `STEPS` ends in `==0.3.36`, then run `install.py` again. | `[1.2.1]` |
+| Loading a `.gguf` file shows "Error: [WinError -1073741795] Windows Error 0xc000001d", or the app closes with no message | That is Windows' "illegal instruction" error: the llama-cpp-python build uses a processor instruction your CPU does not have. 0.3.37 did this on the test machine, and 0.3.36 did not. Check that the llama-cpp-python line in `STEPS` ends in `==0.3.36`, then run `install.py` again. | `[1.2.1]` |
 | "Error: Failed to load shared library ... llama.dll" | The three NVIDIA runtime files are missing: `install.py` was not run, or stopped before the copy. | `[1.2.3]`, step 1.3 |
 | Lines about `n_ctx_train`, `not documented`, `pad_token_id` or generation flags in the terminal | Harmless noise from llama.cpp and transformers. If the status line says "Ready", it worked. | step 3.6 |
 | The PyTorch reply repeats your whole prompt back | `skip_prompt` is missing from the streamer. | `[3.4.4]` |
@@ -774,8 +787,8 @@ Check each of these, once per backend, using the models from step 1.4:
 
 ## How this recipe was checked
 
-- **Install steps:** the answer key's `install.py` was run in an empty Python environment on this machine, and again in a Python that already had everything. Both ended with `cuda: True llama gpu: True`, and the empty environment then chatted with the 0.8B GGUF. The first empty-environment run, before the pin, got llama-cpp-python 0.3.37. It passed the import check but crashed with `0xc000001d` as soon as a model loaded, which is why the version is pinned. The same installs, done by hand, were checked earlier by running the app with both models. Without the copy in `[1.2.3]`, `import llama_cpp` failed, so that step is required.
-- **Answer key:** the finished app was driven through its real window with the 0.8B GGUF, the 4.6 GB GGUF and the 2B PyTorch model. Each loaded with its full 262,144-token context. Replies streamed in dozens of pieces with the window responsive and Send greyed out until the end. The system prompt changed the answers, temperature 0 gave the same answer twice, the instructions window saved its text, and thinking mode showed reasoning, `[end of thinking]` and the answer (with the 4.6 GB model). With the context shrunk on purpose, the oldest messages were forgotten and the conversation always restarted on a user message. Asking for more context than the card holds made llama.cpp's load fail cleanly and the halving find a size that fits.
+- **Install steps:** the answer key's `install.py` was run in an empty Python environment on the test machine, and again in a Python that already had everything. Both ended with `cuda: True llama gpu: True`, and the empty environment then chatted with the 0.8B GGUF. The first empty-environment run, before the pin, got llama-cpp-python 0.3.37. It passed the import check but crashed with `0xc000001d` as soon as a model loaded, which is why the version is pinned. The same installs, done by hand, were checked earlier by running the app with both models. Without the copy in `[1.2.3]`, `import llama_cpp` failed, so that step is required.
+- **Answer key:** the finished app was driven through its real window with the 0.8B GGUF, a Q8 build of the 4B GGUF and the 2B PyTorch model. Each loaded with its full 262,144-token context. Replies streamed in dozens of pieces with the window responsive and Send greyed out until the end. The system prompt changed the answers, temperature 0 gave the same answer twice, the instructions window saved its text, and thinking mode showed reasoning, `[end of thinking]` and the answer (with the 4B model). With the context shrunk on purpose, the oldest messages were forgotten and the conversation always restarted on a user message. Asking for more context than the card holds made llama.cpp's load fail cleanly and the halving find a size that fits.
 - **This document:** copies of the app were written from this recipe alone, without sight of the answer key, and put through the same tests.
 - **Troubleshooting table:** each row that describes a coding mistake was checked by making that mistake in a copy of the answer key and running it. The symptom in the table is what actually happened.
 - **Explanations:** the claims this recipe makes about how Python, tkinter, llama-cpp-python and transformers behave were checked against the installed libraries' source code and small test runs.

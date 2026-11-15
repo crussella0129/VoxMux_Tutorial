@@ -73,7 +73,7 @@ Every conversation opens the same way. The client sends the request `initialize`
    ```
 
    The first three libraries print "Requirement already satisfied", `tzdata` installs, and the check passes as before. Everything else in level 2 uses only Python's own modules.
-4. Use the 4.6 GB model, `C:\models\Newq-Q8_0.gguf`, for most of your testing. The 0.8B and 2B models can call tools too, but they also call them when they should not.
+4. Use the 4B model from step 1.4, `Qwen3.5-4B-Q8_0.gguf`, for most of your testing. The 0.8B and 2B models can call tools too, but they also call them when they should not.
 
 ## Step 7: `backends.py`, changed
 
@@ -666,7 +666,7 @@ From inside `my_build_level2`:
 python app.py
 ```
 
-Load the 4.6 GB model. The status line should end with `(262144 tokens of context, 5 tools)`: two built-in tools and three from the demo server. Then check:
+Load the 4B model. The status line should end with `(262144 tokens of context, 5 tools)`: two built-in tools and three from the demo server. Then check:
 
 1. "What is 1234 * 5678? Use the calculator." The log shows a line like `[calculate {'expression': '1234 * 5678'} -> 7006652]`, then the answer.
 2. "What time is it in Tokyo right now?" The model calls `get_current_time` with `Asia/Tokyo`, and "Running tool get_current_time..." flashes in the status line.
@@ -679,8 +679,8 @@ Load the 4.6 GB model. The status line should end with `(262144 tokens of contex
 
 Any MCP server that talks over stdin and stdout can go in `mcp_servers.json`, as one more entry next to `"demo"`. Two official ones to try:
 
-- **Time:** command `"uvx"`, args `["mcp-server-time"]`. Needs `uv` (installed here).
-- **Files:** command `"npx"`, args `["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\you\\Documents"]`. Needs Node.js (installed here). In JSON, a backslash must be written twice.
+- **Time:** command `"uvx"`, args `["mcp-server-time"]`. Needs `uv`.
+- **Files:** command `"npx"`, args `["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\you\\Documents"]`, with a folder of your own. Needs Node.js. In JSON, a backslash must be written twice.
 
 Each one is downloaded the first time it starts, so the first Load takes longer. If that download takes more than `TIMEOUT_SECONDS` (60), the status line says the server "did not answer initialize"; restart the app to try again once the download has finished. Restart the app after editing the file; servers start only on the first Load. If a server does not start, the status line says so after "MCP problems:", and its `mcp-<name>.log` says why. The time server's tools include its own `get_current_time`; since the demo server's tool has the same name and comes first, the model gets the demo one. Remove `"demo"` to use the official one.
 
@@ -706,8 +706,8 @@ An MCP server runs with your permissions and can do anything you can, so only ad
 
 ## How this was checked
 
-- **The answer key** was driven through its real window with the 0.8B and 4.6 GB GGUF models and the 2B PyTorch model. All three called the calculator and the demo server's three tools correctly from plain questions, and answered without tools when Use tools was off. The note survived between calls.
-- **Compaction** was tested with the context shrunk on purpose. All three models summarised the older half when it filled. The 4.6 GB model's summary kept every early fact, and it then answered a question about the first one correctly.
+- **The answer key** was driven through its real window with the 0.8B GGUF, a Q8 build of the 4B GGUF and the 2B PyTorch model. All three called the calculator and the demo server's three tools correctly from plain questions, and answered without tools when Use tools was off. The note survived between calls.
+- **Compaction** was tested with the context shrunk on purpose. All three models summarised the older half when it filled. The 4B model's summary kept every early fact, and it then answered a question about the first one correctly.
 - **The tool-call reader** was tested on both the `<function=...>` and the JSON style, and on broken calls, which are skipped. The calculator was tested on huge powers, including `(2 ** 1000) ** 1000`, and on code it must refuse. The MCP client was tested on errors, unknown tools, non-English text, a server that prints stray lines and never answers (it is stopped, not left running), and a polite shutdown.
 - **Making room** was tested on 2,000 random conversations mixing user, model and tool messages, with random context sizes. None crashed, the newest user message and everything after it were always kept, and the conversation always started with a user message.
 - **Troubleshooting table:** each row that describes a coding mistake was checked by making that mistake in a copy of the answer key and running it.
