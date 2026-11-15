@@ -59,20 +59,20 @@ Every conversation opens the same way. The client sends the request `initialize`
 
 ## Step 6: set up
 
-1. Install one small package. Windows has no time zone database of its own, and the demo server's time tool (step 10.3) needs one:
-
-   ```bash
-   pip install tzdata
-   ```
-
-   Everything else in level 2 uses only Python's own modules.
-2. Copy your whole working level 1 folder, `my_build`, to a new folder next to it named `my_build_level2`. In PowerShell:
+1. Copy your whole working level 1 folder, `my_build`, to a new folder next to it named `my_build_level2`. In PowerShell:
 
    ```bash
    Copy-Item -Recurse my_build my_build_level2
    ```
 
-3. Move into `my_build_level2`. Every change below is made there, so your level 1 copy stays as it is.
+2. Move into `my_build_level2`. Every change below is made there, so your level 1 copy stays as it is.
+3. Level 2 needs one more small package, `tzdata`. Windows has no time zone database of its own, and the demo server's time tool (step 10.3) needs one. Open `install.py` and add a fourth list to the end of `STEPS`, holding just the string `"tzdata"`. Put a comment above it starting with `[6.1]` that says why it is there. Then run the script again:
+
+   ```bash
+   python install.py
+   ```
+
+   The first three libraries print "Requirement already satisfied", `tzdata` installs, and the check passes as before. Everything else in level 2 uses only Python's own modules.
 4. Use the 4.6 GB model, `C:\models\Newq-Q8_0.gguf`, for most of your testing. The 0.8B and 2B models can call tools too, but they also call them when they should not.
 
 ## Step 7: `backends.py`, changed

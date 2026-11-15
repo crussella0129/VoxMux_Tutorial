@@ -13,16 +13,17 @@ Every step below has a number, such as **3.3.1**. The same number appears in squ
 - Step **3.3.1** in this file describes `LlamaCppBackend.__init__`.
 - In [`answer_key/backends.py`](answer_key/backends.py), that method's docstring starts with `[3.3.1]`.
 
-So when you are stuck on a step, search the answer key for its tag (Ctrl+F, then type `[3.3.1]`) and you land on exactly the lines that step describes. Tags starting with 3 are in `backends.py`. Tags starting with 4 are in `app.py`.
+So when you are stuck on a step, search the answer key for its tag (Ctrl+F, then type `[3.3.1]`) and you land on exactly the lines that step describes. Tags starting with 1 are in `install.py`. Tags starting with 3 are in `backends.py`. Tags starting with 4 are in `app.py`.
 
 Each tagged docstring in the answer key also carries a short "How it works" description. Wherever a step asks for a docstring, write your own, **starting with the same tag**. A few blocks get a comment instead of a docstring; those steps say so, and that comment starts with the tag too. Any other comment the recipe asks for, such as a note above an import or at the end of a line, has no tag. That way your file and the answer key can be compared block by block.
 
 ## What you are building
 
-Three files, in a new folder called `my_build/` at the top of the repo:
+Four files, in a new folder called `my_build/` at the top of the repo:
 
 | Step | File | What it is |
 | --- | --- | --- |
+| 1 | `install.py` | A short script that installs the libraries and checks they work. Not part of the app itself. |
 | 2 | `requirements.txt` | The list of libraries the app uses. |
 | 3 | `backends.py` | A shared base class, two classes that each know how to run one kind of model, and one function that picks between them. No UI code. |
 | 4 | `app.py` | The window: one class for the UI, one `main` function, and the line that starts it. |
@@ -56,51 +57,94 @@ Read this once now and come back to it as needed.
 
 ## Step 1: install
 
-You need Python 3.13 and an NVIDIA graphics card with its normal driver. Everything else is below. Run the commands in order. Each one is safe to run again; if a library is already there, pip says "Requirement already satisfied" and moves on.
+You need Python 3.13 and an NVIDIA graphics card with its normal driver. Everything else gets installed by a short script that you write yourself, `install.py`. It is your first Python file, so it doubles as a warm-up for steps 3 and 4.
 
-### 1.1 PyTorch
+### 1.1 Make your folder
 
-The build on PyPI is CPU-only on Windows, so install the GPU build from PyTorch's own index:
+In the repo root, make a folder named `my_build` and move into it in your terminal. Every file from here on goes there.
+
+### 1.2 `install.py`
+
+**What the script has to do, in order:**
+
+1. Install **PyTorch**. The build on PyPI is CPU-only on Windows, so this one comes from PyTorch's own index, the `cu124` (CUDA 12.4) build.
+2. Install **transformers**, Hugging Face's library that loads safetensors models and tokenizers on top of PyTorch. It must be version 5 or newer. The app was checked with 5.12 and 5.23.
+3. Install **llama-cpp-python**, the Python wrapper around llama.cpp, for GGUF files. PyPI only has source code for Windows, which pip would try to compile. `--only-binary` forbids that, and an extra index supplies a ready-made GPU build. It is pinned to version 0.3.36.
+4. Copy three **NVIDIA runtime files** that the GPU build of llama.cpp needs but does not include. PyTorch includes the same three.
+5. **Check** that everything imports and that both libraries can see the graphics card.
+
+`tkinter`, the window toolkit, comes with Python, so there is nothing to install for it.
+
+**The modules it imports, and why each one:**
+
+- **`subprocess`** runs another program from inside your script and waits for it to finish. The script uses it to run pip, and later to run a fresh Python for the check.
+- **`sys`** gives you `sys.executable`, the full path of the `python.exe` running this script. Each pip command is run as "this Python, `-m pip`", so the libraries go into the same Python that will later run `app.py`. A bare `pip` command could belong to a different Python installed on the same machine.
+- **`sysconfig`** says where this Python keeps its installed libraries: its `site-packages` folder.
+- **`pathlib`** treats a file path as an object. You join path pieces with `/`.
+- **`shutil`** copies files.
+
+**Why each command is a list, not one string.** `subprocess.run` accepts a command in two shapes:
+
+- **A list of strings.** Each string is one argument, handed straight to the program. This is the shape `install.py` uses.
+- **One string with `shell=True`.** The whole line goes to Windows' command shell, `cmd.exe`, which splits it up the way a terminal would. That brings back all of the terminal's rules. A path with spaces needs quotes. `transformers>=5` must be quoted, or `cmd` reads the `>` as "send the output to a file named `=5`". Commands chain with `&&`.
+
+The list has no shell in the way, so nothing needs quoting. Each library gets its own `subprocess.run` call. The keyword argument `check=True` stops the script at the first failure, the job `&&` did in the one-string shape.
+
+**Now type it.**
+
+#### 1.2.1 Top of the file and constants
+
+1. A docstring, starting with the tag `[1.2]`. Say what the file is for and how it works: pip commands run through `subprocess` with `sys.executable`, then the copy, then the check.
+2. Five imports, one per line, in alphabetical order: `pathlib`, `shutil`, `subprocess`, `sys`, `sysconfig`. Each is `import` followed by the module name.
+3. A blank line, then a comment starting with `[1.2.1]` that says what the constants are. Then four constants:
+   - `PIP`: a list of four items, the start of every install command. The first item is `sys.executable` (no quotes: it is a value, not text), then the strings `"-m"`, `"pip"`, `"install"`. `-m pip` means "run the pip module with this Python".
+   - `STEPS`: a list of three lists, written across several lines with one inner list per line and a trailing comma after each. Each inner list is the rest of one pip command:
+     - First, all on one line: `"torch"`, `"--index-url"`, `"https://download.pytorch.org/whl/cu124"`. `--index-url` replaces PyPI with PyTorch's index.
+     - Second: just `"transformers>=5"`. Inside a Python string the `>` is only a character, so no extra quoting is needed.
+     - Third: four strings, too long for one line. Open the bracket, put one string per line indented one more level, each followed by a comma, then close the bracket on its own line followed by a comma. The strings are `"--only-binary=llama-cpp-python"`, `"llama-cpp-python==0.3.36"`, `"--extra-index-url"`, and `"https://abetlen.github.io/llama-cpp-python/whl/cu124"`. `--extra-index-url` adds this index alongside PyPI rather than replacing it. `==0.3.36` pins that exact version: it is the one the app was tested with, and the next one, 0.3.37, crashes on this machine's processor (see "When it does not work").
+   - `CUDA_FILES`: a list of three strings, `"cudart64_12.dll"`, `"cublas64_12.dll"`, `"cublasLt64_12.dll"`.
+   - `CHECK`: a string of Python code that step 1.2.4 runs as its own small program. It is too long for one line, so open a parenthesis after the `=`, put one piece of string per line, and close the parenthesis on its own line. Put no commas between the pieces: Python joins strings that sit next to each other into one. The whole string, once joined, must read `import tkinter, llama_cpp, torch, transformers; print(llama_cpp.__version__, torch.__version__, transformers.__version__, 'cuda:', torch.cuda.is_available(), 'llama gpu:', llama_cpp.llama_supports_gpu_offload())`. Break it after the `; `, after `transformers.__version__, ` and after `torch.cuda.is_available(), `. Keep each piece's trailing space, or the words run together when the pieces are joined. The labels inside it, `'cuda:'` and `'llama gpu:'`, use single quotes because the pieces themselves are in double quotes. A double quote there would end the string early.
+
+#### 1.2.2 `install_libraries()`
+
+Two blank lines after the constants, then a function named `install_libraries` with no parameters. Its docstring starts with `[1.2.2]`. Explain that `PIP + step` joins two lists into one complete command, and that `check=True` stops the script on a failed install.
+
+The body is a `for` loop over `STEPS`, with `step` as the loop variable. Inside it is one line: call `subprocess.run` with two arguments. The first, positional, is `PIP + step`. The second is the keyword argument `check=True`. `+` on two lists makes a new list with the second one's items after the first one's.
+
+#### 1.2.3 `copy_cuda_files()`
+
+Two blank lines, then `copy_cuda_files` with no parameters. Its docstring starts with `[1.2.3]`. Explain that both libraries live in `site-packages`, so both folders are built from that one path.
+
+1. Set `site_packages` to `pathlib.Path(...)` with one argument: `sysconfig.get_paths()["purelib"]`. `get_paths()` returns a dictionary of this Python's folders. The key `"purelib"` is the one where pip puts libraries.
+2. Set `source` to `site_packages / "torch" / "lib"`.
+3. Set `target` to `site_packages / "llama_cpp" / "lib"`.
+4. A `for` loop over `CUDA_FILES` with the loop variable `name`. Inside it, call `shutil.copy` with two arguments: `source / name`, then `target`. Copying into a folder keeps the file's name. A file that is already there is overwritten, so running the script again is safe.
+
+#### 1.2.4 `check()`
+
+Two blank lines, then `check` with no parameters. Its docstring starts with `[1.2.4]`. Explain that the check runs in a new process, the way `app.py` will.
+
+One line: call `subprocess.run` with a list of three items, `sys.executable`, `"-c"` and `CHECK`, then `check=True` as a keyword argument. `python -c "some code"` runs the code text as a program. Running it in a fresh Python proves the libraries load from scratch, rather than relying on anything this script has already done.
+
+#### 1.2.5 `main()`
+
+Two blank lines, then `main` with no parameters. Its docstring starts with `[1.2.5]` and says "Install, copy, then check." The body is three lines, each calling one of the functions above in that order, with empty parentheses.
+
+#### 1.2.6 The start line
+
+Two blank lines, then a comment starting with `[1.2.6]` that says main runs only when this file is run directly. Under it goes `if __name__ == "__main__":` with one indented line that calls `main()`. Python sets `__name__` to `"__main__"` only in the file you ran. If another file imported this one, nothing would install. `app.py` ends with the same line in step 4.
+
+### 1.3 Run it
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+python install.py
 ```
 
-### 1.2 Transformers
+Use the same `python` command you will use later to run `app.py`, because that is the Python the libraries go into. The first run downloads about 3 GB and takes several minutes. Later runs only print "Requirement already satisfied" and finish in seconds.
 
-Hugging Face's library, which loads safetensors models and tokenizers on top of PyTorch:
+It ends with a few `ggml_cuda_init` lines naming your graphics card, then three version numbers followed by `cuda: True llama gpu: True`. If it stops early with `CalledProcessError`, scroll up: pip's own message just above says what went wrong.
 
-```bash
-pip install "transformers>=5"
-```
-
-The `>=5` means "version 5 or newer". The app was checked with versions 5.12 and 5.23.
-
-### 1.3 llama-cpp-python
-
-The Python wrapper around llama.cpp, for GGUF files. PyPI only has source code for Windows, so install the ready-made GPU build from the project's own index:
-
-```bash
-pip install --only-binary=llama-cpp-python llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
-```
-
-### 1.4 NVIDIA runtime files for llama.cpp
-
-The GPU build of llama.cpp needs three NVIDIA files that it does not include. PyTorch includes the same three, so copy them across:
-
-```bash
-python -c "import shutil, sysconfig, pathlib; sp = pathlib.Path(sysconfig.get_paths()['purelib']); [shutil.copy(sp / 'torch' / 'lib' / n, sp / 'llama_cpp' / 'lib') for n in ('cudart64_12.dll', 'cublas64_12.dll', 'cublasLt64_12.dll')]"
-```
-
-### 1.5 Check that everything imports
-
-```bash
-python -c "import tkinter, llama_cpp, torch, transformers; print(llama_cpp.__version__, torch.__version__, transformers.__version__, 'cuda:', torch.cuda.is_available(), 'llama gpu:', llama_cpp.llama_supports_gpu_offload())"
-```
-
-You should see three version numbers followed by `cuda: True llama gpu: True`. `tkinter` is the window toolkit; it comes with Python, so there was nothing to install for it.
-
-### 1.6 Models to test with
+### 1.4 Models to test with
 
 Copy one model of each kind from the NAS into `C:\models`:
 
@@ -119,21 +163,17 @@ robocopy \\nas\models\safetensors\Qwen--Qwen3.5-2B C:\models\Qwen--Qwen3.5-2B /E
 
 For thinking mode, and later for tools, also try `C:\models\Newq-Q8_0.gguf` (4.6 GB), which is already on your machine. The two small models above are fine for chatting but tend to think for ever without answering.
 
-### 1.7 Make your folder
-
-In the repo root, make a folder named `my_build` and move into it in your terminal. All three files go there.
-
 ## Step 2: `requirements.txt`
 
 Make a file named `requirements.txt`. It is plain text with exactly three lines, one per library, and nothing else:
 
-- `llama-cpp-python`
+- `llama-cpp-python==0.3.36`
 - `torch`
 - `transformers>=5`
 
-The `>=5` on the last line is the same "version 5 or newer" rule as step 1.2. This file is the app's record of what it depends on. It has no tags because it has no code.
+The `==0.3.36` on the first line and the `>=5` on the last are the same version rules as in `install.py`: exactly 0.3.36, and 5 or newer. This file is the app's record of what it depends on. It has no tags because it has no code.
 
-Do not install from it on Windows. `pip install -r requirements.txt` would fetch the CPU-only PyTorch and try to compile llama-cpp-python from source. Step 1 is how these libraries get installed.
+Do not install from it on Windows. `pip install -r requirements.txt` would fetch the CPU-only PyTorch and try to compile llama-cpp-python from source. `install.py` from step 1 is how these libraries get installed.
 
 ## Step 3: `backends.py`
 
@@ -359,7 +399,7 @@ Back at zero indentation (outside all three classes), define a function named `l
 From inside `my_build/`, start the Python prompt by running `python` with no arguments. Then, one line at a time:
 
 1. From `backends`, import `load_backend`.
-2. Call it with two arguments, the kind string and the full path to a model from step 1.6, and store the result in a variable. The kind is `"llama_cpp"` for the `.gguf` file and `"pytorch"` for the folder. Put an `r` before the opening quote of a Windows path so the backslashes are taken literally.
+2. Call it with two arguments, the kind string and the full path to a model from step 1.4, and store the result in a variable. The kind is `"llama_cpp"` for the `.gguf` file and `"pytorch"` for the folder. Put an `r` before the opening quote of a Windows path so the backslashes are taken literally.
 3. Print the variable's `context_size` attribute. For the test models it should be `262144`.
 4. Make a list containing one dictionary, with `"role"` set to `"user"` and `"content"` set to a question, and store it in a variable.
 5. Write a `for` loop over a call to `.chat` on your backend variable. Pass four arguments: your list, an empty string for the system prompt, `0.7` for the temperature, and `False` for thinking. Inside the loop, call `print` with the loop variable and two keyword arguments: `end` set to an empty string (so each piece continues on the same line) and `flush` set to `True` (so it shows at once). At the Python prompt, press Enter on an empty line to run the loop.
@@ -689,7 +729,7 @@ From inside `my_build/`:
 python app.py
 ```
 
-Check each of these, once per backend, using the models from step 1.6:
+Check each of these, once per backend, using the models from step 1.4:
 
 1. The window opens with two radio buttons, Browse and Load; a Temperature slider, a Thinking mode box and a Thinking instructions button; a System prompt box; a status line; an empty log; and an entry box with Send.
 2. Clicking Load before Browse shows "Pick a model with Browse first."
@@ -706,6 +746,9 @@ Check each of these, once per backend, using the models from step 1.6:
 
 | What you see | Likely cause | Look at |
 | --- | --- | --- |
+| `SyntaxError: unterminated string literal` when running `install.py` | A string is missing its closing quote, or has an extra one at the end of the line. A `"` left over from a `python -c "..."` command pasted from elsewhere does this. | the line the error names |
+| `install.py` stops with `CalledProcessError` | One of the commands failed. Pip's own message, just above it, says why: often no internet, or a typing mistake in a package name or index address. | `[1.2.1]`, `[1.2.2]` |
+| `install.py` stops with `FileNotFoundError` naming `cudart64_12.dll` | The PyTorch you have is the CPU-only build from PyPI, which was installed before the script ran. Pip saw a `torch` already there and kept it. Add `"--force-reinstall"` to the end of the torch list in `STEPS`, run the script once, then take it out again. | `[1.2.1]` |
 | `IndentationError`, `AttributeError: '...' object has no attribute '...'`, or `NameError: name 'self' is not defined` | A line is at the wrong depth. Methods are indented four spaces inside the class, their bodies eight. | the step you just typed |
 | `TypeError: ... takes 0 positional arguments but 1 was given` (or 1 but 2, and so on) | You left `self` out of the parameters of the method named in the message. If that method is `send`, `event=None` may be missing instead. | the step for the method named in the message (`[4.9]` for `send`) |
 | `TypeError: ... missing 1 required positional argument` in the status line, or "takes 4 positional arguments but 5 were given" | A method is called with a different number of arguments than its definition has: usually `chat`, `stream` or `reply_worker`. Count them against the step. | `[3.2.1]`, `[4.9]`, `[4.12]` |
@@ -718,7 +761,8 @@ Check each of these, once per backend, using the models from step 1.6:
 | The model seems to load, but the status stays on "Loading model..." and the terminal shows `AttributeError: '...Backend' object has no attribute 'context_size'` | `__init__` never stores `self.context_size`, so `poll_results` fails when it reads it and stops checking the queue. | `[3.3.1]`, `[3.4.1]`, `[4.13]` |
 | "Error: Failed to load model from file" | The file is not a chat model. In your models folder, the files whose names start with `mmproj-` are add-ons for image input, not models. | the file you picked |
 | Pressing Send does nothing | No model is loaded yet, or a reply is still being written. | `[4.9]` |
-| "Error: Failed to load shared library ... llama.dll" | The three NVIDIA runtime files are missing. | step 1.4 |
+| Loading a `.gguf` file shows "Error: [WinError -1073741795] Windows Error 0xc000001d", or the app closes with no message | That is Windows' "illegal instruction" error: the llama-cpp-python build uses a processor instruction your CPU does not have. 0.3.37 does this on this machine, and 0.3.36 does not. Check that the llama-cpp-python line in `STEPS` ends in `==0.3.36`, then run `install.py` again. | `[1.2.1]` |
+| "Error: Failed to load shared library ... llama.dll" | The three NVIDIA runtime files are missing: `install.py` was not run, or stopped before the copy. | `[1.2.3]`, step 1.3 |
 | Lines about `n_ctx_train`, `not documented`, `pad_token_id` or generation flags in the terminal | Harmless noise from llama.cpp and transformers. If the status line says "Ready", it worked. | step 3.6 |
 | The PyTorch reply repeats your whole prompt back | `skip_prompt` is missing from the streamer. | `[3.4.4]` |
 | The PyTorch reply appears all at once after a pause | `generate` is being called directly instead of on its own thread. | `[3.4.4]` |
@@ -726,11 +770,11 @@ Check each of these, once per backend, using the models from step 1.6:
 | Send comes back to life after the first word | `set_busy(False)` runs for every result instead of only in the three finishing branches. | `[4.13]` |
 | Words in the reply are doubled or run together | The slice in `reply_worker` is wrong, or `shown` is not being updated. | `[4.12]` |
 | `<generator object ...>` appears instead of a reply, at the Python prompt or in the log | The result of `chat` is being used as if it were a string: passed straight to `print` in step 3.6, or put straight into the queue in `reply_worker`. A generator has to be looped over. | step 3.6, `[4.12]` |
-| `ModuleNotFoundError: No module named 'backends'` | Running `app.py`: `backends.py` is not in the same folder as `app.py`, or was saved under another name (such as `backend.py`, or `backends.py.txt`, which Windows shows as `backends.py` when it hides file extensions). At the Python prompt in step 3.6: you started `python` from a folder other than `my_build/`. | step 1.7, step 3.6 |
+| `ModuleNotFoundError: No module named 'backends'` | Running `app.py`: `backends.py` is not in the same folder as `app.py`, or was saved under another name (such as `backend.py`, or `backends.py.txt`, which Windows shows as `backends.py` when it hides file extensions). At the Python prompt in step 3.6: you started `python` from a folder other than `my_build/`. | step 1.1, step 3.6 |
 
 ## How this recipe was checked
 
-- **Install steps:** steps 1.1 to 1.5 were run, in order and with nothing else, in an empty Python environment on this machine. The check in 1.5 passed, and the app then ran both models in that environment. Skipping step 1.4 made `import llama_cpp` fail, so that step is required.
+- **Install steps:** the answer key's `install.py` was run in an empty Python environment on this machine, and again in a Python that already had everything. Both ended with `cuda: True llama gpu: True`, and the empty environment then chatted with the 0.8B GGUF. The first empty-environment run, before the pin, got llama-cpp-python 0.3.37. It passed the import check but crashed with `0xc000001d` as soon as a model loaded, which is why the version is pinned. The same installs, done by hand, were checked earlier by running the app with both models. Without the copy in `[1.2.3]`, `import llama_cpp` failed, so that step is required.
 - **Answer key:** the finished app was driven through its real window with the 0.8B GGUF, the 4.6 GB GGUF and the 2B PyTorch model. Each loaded with its full 262,144-token context. Replies streamed in dozens of pieces with the window responsive and Send greyed out until the end. The system prompt changed the answers, temperature 0 gave the same answer twice, the instructions window saved its text, and thinking mode showed reasoning, `[end of thinking]` and the answer (with the 4.6 GB model). With the context shrunk on purpose, the oldest messages were forgotten and the conversation always restarted on a user message. Asking for more context than the card holds made llama.cpp's load fail cleanly and the halving find a size that fits.
 - **This document:** copies of the app were written from this recipe alone, without sight of the answer key, and put through the same tests.
 - **Troubleshooting table:** each row that describes a coding mistake was checked by making that mistake in a copy of the answer key and running it. The symptom in the table is what actually happened.
