@@ -1,6 +1,8 @@
 # VoxMux
 The Local AI Multiplexer - chat with a model via llama.cpp or pytorch (directly from safetensor or gguf), without a browser
 
+This repository is the tutorial: build the app yourself, step by step. The finished app, with minimal comments and ready to use, is at [crussella0129/VoxMux](https://github.com/crussella0129/VoxMux).
+
 ## Layout
 
 - [`RECIPE.md`](RECIPE.md): level 1, step-by-step instructions in words for writing the app by hand as a Python exercise: streaming chat, system prompt, temperature, thinking mode, and maximum context with trimming.
