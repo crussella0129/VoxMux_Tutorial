@@ -2,17 +2,24 @@
 
 How it works: this file holds two classes and one function, and no UI code.
 Each class wraps one library. Both classes have the same two methods with
-the same parameters: build one with a path to a model, then call
-.chat(messages) to get the model's reply as a string. Because they look
-identical from the outside, the window in app.py never needs to know which
-one it is holding.
+the same parameters: build one with a path to a model, then loop over
+.chat(messages) to receive the model's reply a few characters at a time.
+Because they look identical from the outside, the window in app.py never
+needs to know which one it is holding.
+
+Both chat methods are generators. A function that contains the word "yield"
+does not run when it is called; it hands back an object you can loop over,
+and each trip round the loop runs the function up to its next yield. That is
+what lets the window show words while the model is still writing.
 
 The numbers in square brackets match the step numbers in RECIPE.md.
 """
 
-# [3.1] Constants: settings shared by both backends.
+import threading
+
+# [3.1] Constants: the settings the backends use.
 MAX_NEW_TOKENS = 512  # the longest reply a model may write, in tokens
-CONTEXT_SIZE = 4096  # how many tokens of conversation llama.cpp keeps in view
+CONTEXT_SIZE = 4096  # the most tokens llama.cpp can hold: conversation plus reply
 
 
 class LlamaCppBackend:
@@ -20,8 +27,8 @@ class LlamaCppBackend:
 
     How it works: llama.cpp does everything itself. It reads the chat
     template stored inside the .gguf file, turns the messages into a prompt,
-    generates, and hands back plain text. This class only has to pass the
-    messages in and dig the reply out of the response.
+    generates, and hands back text. This class only has to pass the messages
+    in and dig the text out of each chunk that comes back.
     """
 
     def __init__(self, model_path):
@@ -43,18 +50,25 @@ class LlamaCppBackend:
         )
 
     def chat(self, messages):
-        """[3.2.2] Send the whole conversation, return the reply as a string.
+        """[3.2.2] Send the whole conversation, yield the reply piece by piece.
 
         How it works: messages is a list of dictionaries, each with a "role"
-        ("user" or "assistant") and a "content" string. llama.cpp answers
-        with a nested dictionary, and the reply text sits four levels down.
+        ("user" or "assistant") and a "content" string. With stream=True,
+        llama.cpp hands back a series of small chunks instead of one finished
+        answer. Each chunk is a nested dictionary whose "delta" holds the few
+        characters that were just written. The first and last chunks carry no
+        text, so those are skipped.
         """
-        response = self.llm.create_chat_completion(
+        stream = self.llm.create_chat_completion(
             messages=messages,
             max_tokens=MAX_NEW_TOKENS,
+            stream=True,
         )
-        reply = response["choices"][0]["message"]["content"]
-        return reply.strip()
+        for chunk in stream:
+            delta = chunk["choices"][0]["delta"]
+            text = delta.get("content")
+            if text:
+                yield text
 
 
 class TransformersBackend:
@@ -87,13 +101,16 @@ class TransformersBackend:
         self.model.to(self.device)
 
     def chat(self, messages):
-        """[3.3.2] Send the whole conversation, return the reply as a string.
+        """[3.3.2] Send the whole conversation, yield the reply piece by piece.
 
         How it works, in four stages: (1) the tokenizer's chat template turns
-        the messages into token numbers, (2) generate() extends that sequence
-        with new tokens, (3) the prompt is sliced off the front, and (4) the
-        tokens that are left are decoded back into text.
+        the messages into token numbers, (2) a streamer is made to catch the
+        words as they are produced, (3) generate() is started on its own
+        thread, because it does not return until the whole reply is written,
+        and (4) this method loops over the streamer and passes each piece on.
         """
+        from transformers import TextIteratorStreamer
+
         # Stage 1: messages -> token numbers, on the same device as the model.
         inputs = self.tokenizer.apply_chat_template(
             messages,
@@ -103,17 +120,27 @@ class TransformersBackend:
         )
         inputs = inputs.to(self.device)
 
-        # Stage 2: let the model write up to MAX_NEW_TOKENS more tokens.
-        output = self.model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS)
+        # Stage 2: the streamer. generate() pushes tokens into it, and it
+        # hands them back out as readable text.
+        streamer = TextIteratorStreamer(
+            self.tokenizer,
+            skip_prompt=True,  # do not repeat the conversation back
+            skip_special_tokens=True,  # leave out markers like end-of-turn
+        )
 
-        # Stage 3: generate() returns the prompt followed by the reply, so
-        # slice the prompt off the front and keep only what the model added.
-        prompt_length = inputs["input_ids"].shape[1]
-        new_tokens = output[0][prompt_length:]
+        # Stage 3: run generate() in the background, writing into the streamer.
+        settings = dict(inputs)
+        settings["max_new_tokens"] = MAX_NEW_TOKENS
+        settings["streamer"] = streamer
+        thread = threading.Thread(
+            target=self.model.generate, kwargs=settings, daemon=True
+        )
+        thread.start()
 
-        # Stage 4: token numbers -> text.
-        reply = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
-        return reply.strip()
+        # Stage 4: pass each piece on as it arrives. Some pieces are empty.
+        for text in streamer:
+            if text:
+                yield text
 
 
 def load_backend(kind, model_path):
@@ -121,8 +148,8 @@ def load_backend(kind, model_path):
 
     How it works: kind is the string "llama_cpp" or "pytorch", the same two
     values the radio buttons in app.py hold. This is the only place that
-    knows both classes exist; everything else just calls .chat() on whatever
-    comes back.
+    knows both classes exist; everything else just loops over .chat() on
+    whatever comes back.
     """
     if kind == "llama_cpp":
         return LlamaCppBackend(model_path)

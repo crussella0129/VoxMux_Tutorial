@@ -3,8 +3,9 @@
 How it works: one class, ChatApp, builds the window and holds the state
 (which model is loaded, the conversation so far). Loading a model and
 generating a reply are slow, so they run on a second thread and report back
-through a queue. The main thread checks that queue ten times a second and
-is the only thread that ever touches the window.
+through a queue. A reply is reported a few characters at a time, which is
+what makes it appear word by word. The main thread checks that queue twenty
+times a second and is the only thread that ever touches the window.
 
 Run it with:  python app.py
 
@@ -19,25 +20,27 @@ from tkinter import filedialog, scrolledtext
 from backends import load_backend
 
 # [4.1] Constant: how often the main thread checks the queue, in milliseconds.
-POLL_INTERVAL_MS = 100
+POLL_INTERVAL_MS = 50
 
 
 class ChatApp:
     """[4.2] The whole window: its widgets, its state, and its behaviour.
 
-    How it works: the methods fall into three groups. Button handlers
-    (browse, load_model, send) run on the main thread when the user does
-    something. Workers (load_worker, reply_worker) run on a second thread and
-    do the slow part. poll_results runs on the main thread on a timer and
-    carries the workers' results back into the window.
+    How it works: apart from setup (__init__, build_widgets) and three small
+    helpers (start_worker, append_chat, set_busy), the methods fall into three
+    groups. Button handlers (browse, load_model, send) run on the main thread
+    when the user does something. Workers (load_worker, reply_worker) run on a
+    second thread and do the slow part. poll_results runs on the main thread
+    on a timer and carries the workers' results back into the window.
     """
 
     def __init__(self, root):
         """[4.3] Set up the window, the starting state, and the queue check.
 
         How it works: root is the main window object made in main(). Every
-        attribute the other methods rely on is created here first, so no
-        method can ever meet one that does not exist yet.
+        attribute the other methods rely on exists by the time this method
+        finishes: the state is created here, and the widgets are created in
+        build_widgets, which this calls.
         """
         self.root = root
         self.root.title("VoxMux")
@@ -143,7 +146,9 @@ class ChatApp:
         How it works: the button calls this with no arguments and the Enter
         key calls it with one (an event object), so event defaults to None
         and is never used. The user's message joins self.messages and the
-        chat log straight away; the reply arrives later through the queue.
+        chat log straight away, followed by the label "Model: " with nothing
+        after it yet. The reply's words are added after that label as they
+        arrive through the queue.
         """
         text = self.entry.get().strip()
         if not text or self.backend is None or self.busy:
@@ -151,7 +156,7 @@ class ChatApp:
 
         self.entry.delete(0, "end")
         self.messages.append({"role": "user", "content": text})
-        self.append_chat("You", text)
+        self.append_chat(f"You: {text}\n\nModel: ")
 
         self.set_busy(True)
         self.status.config(text="Thinking...")
@@ -172,7 +177,8 @@ class ChatApp:
 
         How it works: worker threads must not touch widgets, so this method
         reports by putting a (label, value) pair in the queue. Any error is
-        caught and reported the same way; otherwise it would vanish silently.
+        caught and reported the same way; otherwise the window would never
+        hear about it and would stay busy for good.
         """
         try:
             backend = load_backend(kind, model_path)
@@ -181,14 +187,28 @@ class ChatApp:
             self.results.put(("error", str(error)))
 
     def reply_worker(self):
-        """[4.10] Background thread: get a reply, put the result in the queue.
+        """[4.10] Background thread: stream a reply into the queue.
 
-        How it works: the same pattern as load_worker. The whole conversation
-        is sent every time, which is how the model remembers earlier turns.
+        How it works: the whole conversation is sent every time, which is how
+        the model remembers earlier turns. The backend yields the reply in
+        small pieces. Each piece is added to reply, and whatever part of
+        reply has not been sent to the window yet goes into the queue. The
+        text is stripped before comparing, so blank space at the very start
+        or end of a reply is never shown. When the loop ends, the finished
+        reply is reported once more under a different label.
         """
         try:
-            reply = self.backend.chat(self.messages)
-            self.results.put(("reply", reply))
+            reply = ""  # everything the model has written so far
+            shown = ""  # the part already sent to the window
+            for piece in self.backend.chat(self.messages):
+                reply = reply + piece
+                visible = reply.strip()
+                start = len(shown)  # where the not-yet-shown part begins
+                new_text = visible[start:]
+                if new_text:
+                    self.results.put(("piece", new_text))
+                    shown = visible
+            self.results.put(("reply", shown))
         except Exception as error:
             self.results.put(("error", str(error)))
 
@@ -198,35 +218,42 @@ class ChatApp:
         How it works: empty the queue, updating the window for each result,
         then ask tkinter to call this same method again in POLL_INTERVAL_MS
         milliseconds. That last line is what keeps the checking going for as
-        long as the window is open.
+        long as the window is open. A "piece" means more is coming, so the
+        buttons stay greyed out. The other three results mean the work is
+        over, so each of them brings the buttons back.
         """
         while not self.results.empty():
             kind, value = self.results.get()
 
-            if kind == "loaded":
+            if kind == "piece":
+                self.append_chat(value)
+            elif kind == "reply":
+                self.messages.append({"role": "assistant", "content": value})
+                self.append_chat("\n\n")  # blank line before the next message
+                self.status.config(text=f"Ready: {self.model_path}")
+                self.set_busy(False)
+            elif kind == "loaded":
                 self.backend = value
                 self.messages = []  # a new model starts a new conversation
                 self.status.config(text=f"Ready: {self.model_path}")
-            elif kind == "reply":
-                self.messages.append({"role": "assistant", "content": value})
-                self.append_chat("Model", value)
-                self.status.config(text=f"Ready: {self.model_path}")
+                self.set_busy(False)
             elif kind == "error":
                 self.status.config(text=f"Error: {value}")
-
-            self.set_busy(False)
+                self.set_busy(False)
 
         self.root.after(POLL_INTERVAL_MS, self.poll_results)
 
-    def append_chat(self, speaker, text):
-        """[4.12] Add one "Speaker: text" entry to the chat log.
+    def append_chat(self, text):
+        """[4.12] Add text to the end of the chat log, exactly as given.
 
         How it works: the log is kept read-only so the user cannot type into
         the history. That also blocks the program, so it is unlocked, written
-        to, locked again, and then scrolled to the bottom.
+        to, locked again, and then scrolled to the bottom. The caller decides
+        on labels and line breaks, so the same method serves a whole message
+        and a single streamed word.
         """
         self.chat_log.config(state="normal")
-        self.chat_log.insert("end", f"{speaker}: {text}\n\n")
+        self.chat_log.insert("end", text)
         self.chat_log.config(state="disabled")
         self.chat_log.see("end")
 
