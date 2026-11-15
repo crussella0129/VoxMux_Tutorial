@@ -1,11 +1,12 @@
 """[4.1] app.py: the VoxMux window, a tiny desktop chat for local models.
 
 How it works: one class, ChatApp, builds the window and holds the state
-(which model is loaded, the conversation so far). Loading a model and
-generating a reply are slow, so they run on a second thread and report back
-through a queue. A reply is reported a few characters at a time, which is
-what makes it appear word by word. The main thread checks that queue twenty
-times a second and is the only thread that ever touches the window.
+(which model is loaded, the conversation so far, the thinking-mode
+instructions). Loading a model and generating a reply are slow, so they run
+on a second thread and report back through a queue. A reply is reported a
+few characters at a time, which is what makes it appear word by word. The
+main thread checks that queue twenty times a second and is the only thread
+that ever touches the window.
 
 Run it with:  python app.py
 
@@ -19,19 +20,24 @@ from tkinter import filedialog, scrolledtext
 
 from backends import load_backend
 
-# [4.1] Constant: how often the main thread checks the queue, in milliseconds.
-POLL_INTERVAL_MS = 50
+# [4.1] Constants: timing and the starting values of the settings.
+POLL_INTERVAL_MS = 50  # how often the main thread checks the queue
+DEFAULT_TEMPERATURE = 0.7  # 0 is predictable, 2 is very random
+DEFAULT_THINKING_INSTRUCTIONS = (
+    "Think through the question step by step before you answer."
+)
 
 
 class ChatApp:
     """[4.2] The whole window: its widgets, its state, and its behaviour.
 
     How it works: apart from setup (__init__, build_widgets) and three small
-    helpers (start_worker, append_chat, set_busy), the methods fall into three
-    groups. Button handlers (browse, load_model, send) run on the main thread
-    when the user does something. Workers (load_worker, reply_worker) run on a
-    second thread and do the slow part. poll_results runs on the main thread
-    on a timer and carries the workers' results back into the window.
+    helpers (start_worker, append_chat, set_busy), the methods fall into
+    three groups. Button handlers (browse, open_thinking_window,
+    save_thinking_instructions, load_model, send) run on the main thread
+    when the user does something. Workers (load_worker, reply_worker) run on
+    a second thread and do the slow part. poll_results runs on the main
+    thread on a timer and carries the workers' results back into the window.
     """
 
     def __init__(self, root):
@@ -44,13 +50,14 @@ class ChatApp:
         """
         self.root = root
         self.root.title("VoxMux")
-        self.root.geometry("700x500")
+        self.root.geometry("800x600")
 
         self.backend = None  # the loaded model, once there is one
         self.model_path = ""  # what the user picked with Browse
         self.messages = []  # the whole conversation so far
         self.busy = False  # True while a worker thread is running
         self.results = queue.Queue()  # how worker threads report back
+        self.thinking_instructions = DEFAULT_THINKING_INSTRUCTIONS
 
         self.build_widgets()
         self.poll_results()
@@ -60,7 +67,7 @@ class ChatApp:
 
         How it works: each widget is created with its parent as the first
         argument, then placed with .pack(). tkinter hands out space in the
-        order widgets are packed, so the order of the four blocks below is
+        order widgets are packed, so the order of the six blocks below is
         the layout.
         """
         # [4.4.1] Top row: pick a backend, pick a model, load it.
@@ -87,11 +94,44 @@ class ChatApp:
         self.load_button = tk.Button(top, text="Load", command=self.load_model)
         self.load_button.pack(side="left")
 
-        # [4.4.2] Status line: one row of text that says what is going on.
-        self.status = tk.Label(self.root, text="No model loaded.", anchor="w")
-        self.status.pack(fill="x", padx=8)
+        # [4.4.2] Settings row: temperature and thinking mode.
+        settings = tk.Frame(self.root)
+        settings.pack(fill="x", padx=8)
 
-        # [4.4.3] Bottom row: type a message, send it. Packed before the chat
+        tk.Label(settings, text="Temperature").pack(side="left")
+        self.temperature = tk.DoubleVar(value=DEFAULT_TEMPERATURE)
+        tk.Scale(
+            settings,
+            variable=self.temperature,
+            from_=0,
+            to=2,
+            resolution=0.1,
+            orient="horizontal",
+            length=160,
+        ).pack(side="left", padx=(4, 16))
+
+        self.thinking = tk.BooleanVar(value=False)
+        tk.Checkbutton(settings, text="Thinking mode", variable=self.thinking).pack(
+            side="left"
+        )
+        tk.Button(
+            settings,
+            text="Thinking instructions...",
+            command=self.open_thinking_window,
+        ).pack(side="left", padx=8)
+
+        # [4.4.3] System prompt: standing instructions sent with every message.
+        tk.Label(self.root, text="System prompt:", anchor="w").pack(
+            fill="x", padx=8, pady=(8, 0)
+        )
+        self.system_box = tk.Text(self.root, height=3, wrap="word")
+        self.system_box.pack(fill="x", padx=8)
+
+        # [4.4.4] Status line: one row of text that says what is going on.
+        self.status = tk.Label(self.root, text="No model loaded.", anchor="w")
+        self.status.pack(fill="x", padx=8, pady=(8, 0))
+
+        # [4.4.5] Bottom row: type a message, send it. Packed before the chat
         # log so it keeps its place at the bottom when the window is resized.
         bottom = tk.Frame(self.root)
         bottom.pack(side="bottom", fill="x", padx=8, pady=8)
@@ -103,7 +143,7 @@ class ChatApp:
         self.send_button = tk.Button(bottom, text="Send", command=self.send)
         self.send_button.pack(side="left", padx=(8, 0))
 
-        # [4.4.4] Chat log: read-only, and fills whatever space is left.
+        # [4.4.6] Chat log: read-only, and fills whatever space is left.
         self.chat_log = scrolledtext.ScrolledText(
             self.root, wrap="word", state="disabled"
         )
@@ -114,7 +154,7 @@ class ChatApp:
 
         How it works: a GGUF model is one file and a safetensors model is a
         whole folder, so the selected radio button decides which kind of
-        picker opens. Both pickers return an empty string on Cancel.
+        picker opens. Both pickers give back something empty on Cancel.
         """
         if self.backend_kind.get() == "llama_cpp":
             path = filedialog.askopenfilename(filetypes=[("GGUF model", "*.gguf")])
@@ -125,8 +165,45 @@ class ChatApp:
             self.model_path = path
             self.status.config(text=f"Selected: {path}")
 
+    def open_thinking_window(self):
+        """[4.6] Thinking instructions button: open a small editing window.
+
+        How it works: a Toplevel is a second window that belongs to the main
+        one. It holds a text box filled with the current instructions and a
+        Save button. The button needs to tell save_thinking_instructions
+        which window and which box to use, so its command is a lambda: a
+        tiny function, written in place, that makes that call when clicked.
+        """
+        window = tk.Toplevel(self.root)
+        window.title("Thinking mode instructions")
+
+        tk.Label(
+            window,
+            text="Added to the system prompt whenever Thinking mode is on:",
+            anchor="w",
+        ).pack(fill="x", padx=8, pady=(8, 0))
+        box = tk.Text(window, width=60, height=8, wrap="word")
+        box.pack(fill="both", expand=True, padx=8, pady=8)
+        box.insert("1.0", self.thinking_instructions)
+
+        tk.Button(
+            window,
+            text="Save",
+            command=lambda: self.save_thinking_instructions(window, box),
+        ).pack(pady=(0, 8))
+
+    def save_thinking_instructions(self, window, box):
+        """[4.7] Save button: keep the edited instructions, close the window.
+
+        How it works: a Text widget's contents run from "1.0" (line 1,
+        character 0) to "end". Tk always adds a newline at the end, so the
+        text is stripped before it is kept.
+        """
+        self.thinking_instructions = box.get("1.0", "end").strip()
+        window.destroy()
+
     def load_model(self):
-        """[4.6] Load button: start loading the picked model in the background.
+        """[4.8] Load button: start loading the picked model in the background.
 
         How it works: this method only starts the work. It greys out the
         buttons, updates the status, hands load_worker to a new thread, and
@@ -141,29 +218,37 @@ class ChatApp:
         self.start_worker(self.load_worker, self.backend_kind.get(), self.model_path)
 
     def send(self, event=None):
-        """[4.7] Send button or Enter key: add the message, ask for a reply.
+        """[4.9] Send button or Enter key: add the message, ask for a reply.
 
         How it works: the button calls this with no arguments and the Enter
         key calls it with one (an event object), so event defaults to None
-        and is never used. The user's message joins self.messages and the
-        chat log straight away, followed by the label "Model: " with nothing
-        after it yet. The reply's words are added after that label as they
-        arrive through the queue.
+        and is never used. Every setting is read from its widget here, on
+        the main thread, and handed to the worker as plain values, because
+        only the main thread may touch widgets. The user's message joins
+        self.messages and the chat log straight away, followed by the label
+        "Model: " with nothing after it yet.
         """
         text = self.entry.get().strip()
         if not text or self.backend is None or self.busy:
             return
+
+        system_prompt = self.system_box.get("1.0", "end").strip()
+        temperature = self.temperature.get()
+        thinking = self.thinking.get()
+        if thinking and self.thinking_instructions:
+            system_prompt = system_prompt + "\n\n" + self.thinking_instructions
+            system_prompt = system_prompt.strip()
 
         self.entry.delete(0, "end")
         self.messages.append({"role": "user", "content": text})
         self.append_chat(f"You: {text}\n\nModel: ")
 
         self.set_busy(True)
-        self.status.config(text="Thinking...")
-        self.start_worker(self.reply_worker)
+        self.status.config(text="Writing a reply...")
+        self.start_worker(self.reply_worker, system_prompt, temperature, thinking)
 
     def start_worker(self, target, *args):
-        """[4.8] Run target(*args) on a new background thread.
+        """[4.10] Run target(*args) on a new background thread.
 
         How it works: slow work on the main thread would freeze the window,
         so it gets a thread of its own. daemon=True means the thread is
@@ -173,7 +258,7 @@ class ChatApp:
         thread.start()
 
     def load_worker(self, kind, model_path):
-        """[4.9] Background thread: load a model, put the result in the queue.
+        """[4.11] Background thread: load a model, put the result in the queue.
 
         How it works: worker threads must not touch widgets, so this method
         reports by putting a (label, value) pair in the queue. Any error is
@@ -186,34 +271,38 @@ class ChatApp:
         except Exception as error:
             self.results.put(("error", str(error)))
 
-    def reply_worker(self):
-        """[4.10] Background thread: stream a reply into the queue.
+    def reply_worker(self, system_prompt, temperature, thinking):
+        """[4.12] Background thread: stream a reply into the queue.
 
         How it works: the whole conversation is sent every time, which is how
-        the model remembers earlier turns. The backend yields the reply in
-        small pieces. Each piece is added to reply, and whatever part of
-        reply has not been sent to the window yet goes into the queue. The
-        text is stripped before comparing, so blank space at the very start
-        or end of a reply is never shown. When the loop ends, the finished
-        reply is reported once more under a different label.
+        the model remembers earlier turns (the backend forgets the oldest
+        turns if they no longer fit). The backend yields the reply in small
+        pieces. Each piece is added to reply, and whatever part of reply has
+        not been sent to the window yet goes into the queue. In thinking
+        mode the model writes its reasoning first and ends it with </think>;
+        that marker is shown as "[end of thinking]", and only the answer
+        after it is kept in the conversation.
         """
         try:
             reply = ""  # everything the model has written so far
             shown = ""  # the part already sent to the window
-            for piece in self.backend.chat(self.messages):
+            for piece in self.backend.chat(
+                self.messages, system_prompt, temperature, thinking
+            ):
                 reply = reply + piece
-                visible = reply.strip()
+                visible = reply.replace("</think>", "\n[end of thinking]").strip()
                 start = len(shown)  # where the not-yet-shown part begins
                 new_text = visible[start:]
                 if new_text:
                     self.results.put(("piece", new_text))
                     shown = visible
-            self.results.put(("reply", shown))
+            answer = reply.split("</think>")[-1].strip()
+            self.results.put(("reply", answer))
         except Exception as error:
             self.results.put(("error", str(error)))
 
     def poll_results(self):
-        """[4.11] Main thread, on a timer: apply whatever the workers reported.
+        """[4.13] Main thread, on a timer: apply whatever the workers reported.
 
         How it works: empty the queue, updating the window for each result,
         then ask tkinter to call this same method again in POLL_INTERVAL_MS
@@ -235,7 +324,10 @@ class ChatApp:
             elif kind == "loaded":
                 self.backend = value
                 self.messages = []  # a new model starts a new conversation
-                self.status.config(text=f"Ready: {self.model_path}")
+                size = value.context_size
+                self.status.config(
+                    text=f"Ready: {self.model_path} ({size} tokens of context)"
+                )
                 self.set_busy(False)
             elif kind == "error":
                 self.status.config(text=f"Error: {value}")
@@ -244,7 +336,7 @@ class ChatApp:
         self.root.after(POLL_INTERVAL_MS, self.poll_results)
 
     def append_chat(self, text):
-        """[4.12] Add text to the end of the chat log, exactly as given.
+        """[4.14] Add text to the end of the chat log, exactly as given.
 
         How it works: the log is kept read-only so the user cannot type into
         the history. That also blocks the program, so it is unlocked, written
@@ -258,7 +350,7 @@ class ChatApp:
         self.chat_log.see("end")
 
     def set_busy(self, busy):
-        """[4.13] Grey out Load and Send while work is running, or bring them back.
+        """[4.15] Grey out Load and Send while work is running, or bring them back.
 
         How it works: busy is True or False. It is saved on self.busy so
         send() can check it, and it is turned into the "disabled" or "normal"
@@ -274,7 +366,7 @@ class ChatApp:
 
 
 def main():
-    """[4.14] Create the window, attach the app to it, and run until closed.
+    """[4.16] Create the window, attach the app to it, and run until closed.
 
     How it works: mainloop() is tkinter's event loop. It waits for clicks,
     keypresses and timers, calls the matching method for each, and does not
@@ -285,7 +377,7 @@ def main():
     root.mainloop()
 
 
-# [4.15] Start the app only when this file is run directly (python app.py),
+# [4.17] Start the app only when this file is run directly (python app.py),
 # not when another file imports it.
 if __name__ == "__main__":
     main()

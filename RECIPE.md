@@ -1,17 +1,19 @@
-# VoxMux recipe: build it by hand
+# VoxMux recipe: build it by hand (level 1)
 
-This is a description, in words, of every file in [`answer_key/`](answer_key/). Follow it top to bottom, type every line yourself, and you will end up with the same app: a desktop window where you pick llama.cpp (a `.gguf` file) or PyTorch (a folder of `.safetensors` weights), load a model, and chat with it, with replies appearing word by word as the model writes them.
+This is a description, in words, of every file in [`answer_key/`](answer_key/). Follow it top to bottom, type every line yourself, and you will end up with the same app: a desktop window where you pick llama.cpp (a `.gguf` file) or PyTorch (a folder of `.safetensors` weights), load a model, and chat with it. Replies appear word by word as the model writes them. You can give the model a system prompt, set its temperature, and switch on thinking mode with your own instructions. The app always loads the biggest context the model and your graphics card allow, and quietly forgets the oldest messages when a conversation outgrows it.
 
 There is no finished code in this document. The finished code is in `answer_key/`, and the two are tied together by **reference tags**.
 
+When this works, [RECIPE_LEVEL2.md](RECIPE_LEVEL2.md) is level 2: summarising old messages instead of forgetting them, tool calling, and MCP servers.
+
 ## How the reference tags work
 
-Every step below has a number, such as **3.2.1**. The same number appears in square brackets in the answer key, in the docstring or comment sitting on the matching block of code:
+Every step below has a number, such as **3.3.1**. The same number appears in square brackets in the answer key, in the docstring or comment sitting on the matching block of code:
 
-- Step **3.2.1** in this file describes `LlamaCppBackend.__init__`.
-- In [`answer_key/backends.py`](answer_key/backends.py), that method's docstring starts with `[3.2.1]`.
+- Step **3.3.1** in this file describes `LlamaCppBackend.__init__`.
+- In [`answer_key/backends.py`](answer_key/backends.py), that method's docstring starts with `[3.3.1]`.
 
-So when you are stuck on a step, search the answer key for its tag (Ctrl+F, then type `[3.2.1]`) and you land on exactly the lines that step describes. Tags starting with 3 are in `backends.py`. Tags starting with 4 are in `app.py`.
+So when you are stuck on a step, search the answer key for its tag (Ctrl+F, then type `[3.3.1]`) and you land on exactly the lines that step describes. Tags starting with 3 are in `backends.py`. Tags starting with 4 are in `app.py`.
 
 Each tagged docstring in the answer key also carries a short "How it works" description. Wherever a step asks for a docstring, write your own, **starting with the same tag**. A few blocks get a comment instead of a docstring; those steps say so, and that comment starts with the tag too. Any other comment the recipe asks for, such as a note above an import or at the end of a line, has no tag. That way your file and the answer key can be compared block by block.
 
@@ -22,10 +24,10 @@ Three files, in a new folder called `my_build/` at the top of the repo:
 | Step | File | What it is |
 | --- | --- | --- |
 | 2 | `requirements.txt` | The list of libraries the app uses. |
-| 3 | `backends.py` | Two classes that each know how to run one kind of model, plus one function that picks between them. No UI code. |
+| 3 | `backends.py` | A shared base class, two classes that each know how to run one kind of model, and one function that picks between them. No UI code. |
 | 4 | `app.py` | The window: one class for the UI, one `main` function, and the line that starts it. |
 
-The idea that holds it together: both backend classes have **the same two methods with the same parameters**. You build one by giving it a model path, and you loop over `chat` with the conversation so far to receive the reply a few characters at a time. Because the two look identical from the outside, the window never has to care which one it is holding.
+The idea that holds it together: both backend classes have **the same methods with the same parameters**. You build one by giving it a model path, and you loop over `chat` with the conversation so far to receive the reply a few characters at a time. Because the two look identical from the outside, the window never has to care which one it is holding.
 
 ## Python syntax you will meet
 
@@ -36,16 +38,20 @@ Read this once now and come back to it as needed.
 - **Positional vs keyword arguments.** `f(a, b)` passes by position. `f(width=3, height=4)` passes by name. Library calls with many options are almost always written with keyword arguments, often one per line inside the parentheses with a trailing comma after the last one.
 - **Default parameter values.** `def send(self, event=None):` means `event` is optional and is `None` if the caller leaves it out.
 - **Classes** are written `class Name:`. Functions defined inside are *methods*. Every method's first parameter is `self`, which is the object the method was called on. You never pass `self` yourself: calling `thing.chat(messages)` fills in `self` with `thing`.
+- **Inheritance.** `class Child(Parent):` makes a class that starts with every method of `Parent`. Inside `Parent`'s methods, `self` is still the child object, so a parent's method can call methods that only the child defines. That is how one `chat` method can serve two different backends.
 - **`__init__`** (two underscores each side) is the method Python runs when you build an object. Writing `Name(x)` calls `__init__(self, x)`.
 - **Attributes.** `self.something = value` stores a value on the object so other methods can read it later as `self.something`.
 - **Strings** go in quotes. Python accepts single or double quotes; this app uses double quotes throughout. An **f-string** starts with `f` before the opening quote and lets you drop values in with braces: `f"Ready: {path}"`.
-- **Lists** use square brackets, **dictionaries** use braces with `key: value` pairs, **tuples** use parentheses. You read from all three with square brackets: `thing[0]`, `thing["name"]`.
+- **Lists** use square brackets, **dictionaries** use braces with `key: value` pairs, **tuples** use parentheses. You read from all three with square brackets: `thing[0]`, `thing["name"]`. `del things[0]` removes the first item of a list. `[a] + things` makes a new list with `a` in front.
+- **Booleans** are `True` and `False`. Empty things (`""`, `[]`, `None`, `0`) count as false in an `if`.
 - **Docstrings.** A string in triple double quotes as the first thing in a file, class, or function is its documentation. It goes on the line directly under the `def` or `class` line, indented like the rest of the body.
 - **Comments** start with `#`.
 - **Constants** are ordinary variables written in `ALL_CAPS` near the top of a file. Python does not enforce it; it is a naming habit.
 - **Passing a function vs calling it.** `self.browse` (no parentheses) is the function itself, which you hand to something that will call it later. `self.browse()` calls it right now. Buttons want the first form.
-- **Loops.** `for item in things:` runs its block once for each item. `while condition:` runs its block for as long as the condition is true.
-- **Generators and `yield`.** A function that contains the word `yield` is a *generator*. Calling it does not run it; it hands back an object you can put in a `for` loop. Each trip round the loop runs the function up to its next `yield` and gives you the value written after that word. When the function ends, the loop ends. This is how a reply can be handed over in pieces while the model is still writing it.
+- **`lambda`** writes a tiny function in place: `lambda: self.save(window, box)` is a function that, when it is called later, calls `self.save(window, box)`. Use it when a button must call a method *with* arguments.
+- **Loops.** `for item in things:` runs its block once for each item. `while condition:` runs its block for as long as the condition is true. `while True:` runs until a `break` or `return` inside it.
+- **Errors.** `try:` runs a block; if something in it fails, the matching `except SomeError as error:` block runs instead, with the failure in `error`. A bare `raise` inside `except` passes the same failure on unchanged.
+- **Generators and `yield`.** A function that contains the word `yield` is a *generator*. Calling it does not run it; it hands back an object you can put in a `for` loop. Each trip round the loop runs the function up to its next `yield` and gives you the value written after that word. When the function ends, the loop ends. `yield from other()` hands on every value that the generator `other()` yields. This is how a reply can be handed over in pieces while the model is still writing it.
 - **Blank lines.** One blank line between methods inside a class. Two blank lines between top-level classes and functions.
 
 ## Step 1: install
@@ -94,7 +100,7 @@ python -c "import tkinter, llama_cpp, torch, transformers; print(llama_cpp.__ver
 
 You should see three version numbers followed by `cuda: True llama gpu: True`. `tkinter` is the window toolkit; it comes with Python, so there was nothing to install for it.
 
-### 1.6 Two small models to test with
+### 1.6 Models to test with
 
 Copy one model of each kind from the NAS into `C:\models`:
 
@@ -110,6 +116,8 @@ robocopy \\nas\models\safetensors\Qwen--Qwen3.5-2B C:\models\Qwen--Qwen3.5-2B /E
 | --- | --- | --- |
 | llama.cpp | `C:\models\Qwen3.5-0.8B-Q8_0.gguf` (a file) | 0.8 GB |
 | PyTorch | `C:\models\Qwen--Qwen3.5-2B` (a folder) | 4.3 GB |
+
+For thinking mode, and later for tools, also try `C:\models\Newq-Q8_0.gguf` (4.6 GB), which is already on your machine. The two small models above are fine for chatting but tend to think for ever without answering.
 
 ### 1.7 Make your folder
 
@@ -131,70 +139,77 @@ Do not install from it on Windows. `pip install -r requirements.txt` would fetch
 
 This file has no UI in it at all. You can finish it and test it from a terminal before you write a single line of window code.
 
+Its shape: a base class, `Backend`, holds what both backends share. It knows how to fit a conversation into the model's context and then stream a reply, but it cannot run a model itself. Two classes inherit from it, `LlamaCppBackend` and `TransformersBackend`, and each fills in the four things the base class needs from a real model:
+
+- `context_size`: how many tokens the model can read at once.
+- `build_prompt(messages, thinking)`: turn the conversation into the one string the model reads.
+- `count_tokens(prompt)`: how many tokens that string takes up.
+- `stream(prompt, temperature)`: yield the model's reply to that string, piece by piece.
+
 ### 3.1 Top of the file
 
 *Answer key: `[3.1]` in `backends.py` (it appears twice, on the module docstring and on the constants).*
 
-1. Start with a **module docstring** on the very first line. Begin it with the tag `[3.1]`, then say in your own words what the file is and how it works: two classes that each wrap one library, sharing the same two methods, so the window never needs to know which one it has. Add that both `chat` methods are generators, and what that means.
-2. Leave a blank line, then one import: `threading`. It is part of Python itself, and step 3.3.2 uses it.
+1. Start with a **module docstring** on the very first line. Begin it with the tag `[3.1]`, then say in your own words what the file is and how it works: a base class, two backends built on it that look the same from outside, so the window never needs to know which one it has. Add that both `chat` methods are generators, and what that means.
+2. Leave a blank line, then one import: `threading`. It is part of Python itself, and step 3.4.4 uses it.
 3. Leave a blank line, then a comment line starting with the tag `[3.1]` that says these are the settings the backends use. Under it define two constants, each with a short comment after it on the same line:
-   - `MAX_NEW_TOKENS`, set to the integer `512`. This caps how long a reply can be.
-   - `CONTEXT_SIZE`, set to the integer `4096`. This is the most tokens llama.cpp can work with at once: the whole conversation sent so far plus the reply being written. Nothing old is dropped to make room (see "Known rough edges").
-4. The model libraries (`llama_cpp`, `torch`, `transformers`) are **not imported at the top of this file**. That is deliberate, and 3.2.1 explains why.
+   - `MAX_NEW_TOKENS`, set to the integer `4096`. This caps how long a reply can be. Thinking mode needs plenty of room, which is why it is this large.
+   - `SMALLEST_CONTEXT`, set to the integer `4096`. If not even this much context fits on the graphics card, loading gives up.
+4. The model libraries (`llama_cpp`, `torch`, `transformers`) are **not imported at the top of this file**. That is deliberate, and 3.3.1 explains why.
 
-### 3.2 The class `LlamaCppBackend`
+### 3.2 The class `Backend`
 
 *Answer key: `[3.2]`.*
 
-Define a class named `LlamaCppBackend`. It takes nothing in parentheses after its name.
+Define a class named `Backend`. It takes nothing in parentheses after its name.
 
-**Docstring:** start with `[3.2]`. Say that it runs a single `.gguf` file through llama.cpp, and how: llama.cpp reads the chat template stored inside the file, builds the prompt, generates, and returns text, so this class only passes messages in and digs the text out of each chunk that comes back.
+**Docstring:** start with `[3.2]`. Say that a model can only read a limited number of tokens at once (its context size), that `chat` first builds the prompt and forgets the oldest messages while it is too long, then streams the reply, and that this class never runs a model itself: each subclass supplies `context_size`, `build_prompt`, `count_tokens` and `stream`.
 
 It has two methods.
 
-#### 3.2.1 Method `__init__`
+#### 3.2.1 Method `chat`
 
 *Answer key: `[3.2.1]`.*
 
-Parameters: `self` and `model_path`.
+Parameters: `self`, `messages`, `system_prompt`, `temperature` and `thinking`.
 
-**Docstring:** start with `[3.2.1]`. Say that it loads the file into memory, that this is the slow part, and that the result is kept on `self` so `chat` can reuse it.
+`messages` is a list of dictionaries. Each dictionary has two keys, `"role"` and `"content"`, both with string values. The role is `"user"` or `"assistant"`. This is the same shape every chat API uses. `system_prompt` is a string (possibly empty), `temperature` is a number, and `thinking` is `True` or `False`.
 
-1. Straight after the docstring comes an import, with a comment above it: from the module `llama_cpp`, import the name `Llama` (capital L, it is a class). Putting the import inside the method instead of at the top of the file means it only runs when someone actually builds this backend, so the app still starts if `llama-cpp-python` is not installed. The comment above the import should say so.
-2. Build a `Llama` object and store it on `self` as `self.llm`. Pass four keyword arguments, one per line:
-   - `model_path` set to the `model_path` parameter.
-   - `n_ctx` set to your `CONTEXT_SIZE` constant.
-   - `n_gpu_layers` set to `-1`, which means "put every layer on the GPU".
-   - `verbose` set to `False`, which stops llama.cpp printing pages of logs.
-3. `__init__` returns nothing. No `return` line.
+**Docstring:** start with `[3.2.1]`. Describe the parameters, and say that `yield from` passes on every piece `stream` yields, which makes this method a generator too.
 
-#### 3.2.2 Method `chat`
+1. Call `self.fit_to_context` with `messages`, `system_prompt` and `thinking`, and store the result as `prompt`.
+2. On the next line write `yield from`, then a call to `self.stream` with `prompt` and `temperature`.
+
+#### 3.2.2 Method `fit_to_context`
 
 *Answer key: `[3.2.2]`.*
 
-Parameters: `self` and `messages`.
+Parameters: `self`, `messages`, `system_prompt` and `thinking`.
 
-`messages` is a list of dictionaries. Each dictionary has two keys, `"role"` and `"content"`, both with string values. The role is `"user"` or `"assistant"`. This is the same shape every chat API uses.
+This is the trimming. It builds the prompt and checks its size. If it is too big, it deletes the oldest message from `messages` *itself* (not a copy), so the deleted message stays gone and is never counted again. Room for the reply is set aside first.
 
-This method is a **generator**: it uses `yield` instead of `return`, and hands the reply over a few characters at a time.
+**Docstring:** start with `[3.2.2]`. Say what it does, that deletions are made to `messages` itself so they last, and that a conversation must start with something the user said, so leftover replies at the front go too. Add that the newest message is never deleted, even if it is too long on its own: llama.cpp then reports an error if the prompt fills the whole context, and PyTorch tries anyway.
 
-**Docstring:** start with `[3.2.2]`. Say that it sends the whole conversation and yields the reply piece by piece, describe the shape of `messages`, and say what a chunk is.
+1. Work out how much to set aside for the reply: the smaller of `MAX_NEW_TOKENS` and half the context (`self.context_size // 2`), using `min(...)`. Store it as `reserve`. Without the half, a model with a small context would have no room left at all. Then set `room` to `self.context_size` minus `reserve`.
+2. Start a `while True:` loop. Everything below is inside it.
+3. Set a variable named `full` to `messages`.
+4. `if system_prompt:` (that is, if it is not empty), set `full` to a new list: a list holding one dictionary, with `"role"` set to `"system"` and `"content"` set to `system_prompt`, plus `messages`. Use `+` to join the two lists.
+5. Call `self.build_prompt` with `full` and `thinking`, and store the result as `prompt`.
+6. Write an `if` with two conditions joined by `or`: the result of `self.count_tokens(prompt)` is less than or equal to (`<=`) `room`, **or** the length of `messages` (`len(messages)`) equals `1`. Inside it, `return prompt`. The second condition is the safety catch: the newest message alone is never deleted.
+7. After that `if` (still inside the loop), delete the oldest message with `del messages[0]`.
+8. Then a second, inner `while` loop: as long as the role of `messages[0]` is not equal to (`!=`) `"user"`, `del messages[0]` again. This removes replies left at the front.
 
-1. Call the method `create_chat_completion` on `self.llm` and store what comes back in a variable named `stream`. Pass three keyword arguments, one per line: `messages` set to the `messages` parameter, `max_tokens` set to `MAX_NEW_TOKENS`, and `stream` set to `True`. That last one is what makes llama.cpp hand back a series of small chunks instead of one finished answer.
-2. Write a `for` loop over `stream`, naming the loop variable `chunk`. Everything below is inside the loop.
-3. Each `chunk` is a nested dictionary. The new text lives under: key `"choices"`, then index `0` of that list, then key `"delta"`. Chain three sets of square brackets to reach it and store it in a variable named `delta`.
-4. `delta` is a small dictionary that usually has a `"content"` key, but the first and last chunks do not have one. Reading a missing key with square brackets is an error, so call `.get` on `delta` with the string `"content"` instead; `.get` gives back `None` when the key is missing. Store the result as `text`.
-5. Write `if text:` and inside it, `yield text`. `None` and the empty string both count as false, so only real text is passed on.
+The loop then goes round and checks again.
 
-There is no `return` line. The generator ends when the loop ends.
-
-### 3.3 The class `TransformersBackend`
+### 3.3 The class `LlamaCppBackend`
 
 *Answer key: `[3.3]`.*
 
-Define a second class named `TransformersBackend`. Same two methods, same parameters, different insides.
+Define a class named `LlamaCppBackend` that inherits from `Backend`: put `Backend` in parentheses after the name.
 
-**Docstring:** start with `[3.3]`. Say that it runs a folder of safetensors weights through PyTorch, and how: a tokenizer turns text into numbers, the model predicts more numbers, and the tokenizer turns them back into text.
+**Docstring:** start with `[3.3]`. Say that it runs a single `.gguf` file through llama.cpp, and what the file carries: the weights, the chat template, and the longest context the model was trained for. Say that it loads with as much context as the card can hold, uses the template to build one prompt string, and streams what llama.cpp writes after it.
+
+It has four methods.
 
 #### 3.3.1 Method `__init__`
 
@@ -202,78 +217,170 @@ Define a second class named `TransformersBackend`. Same two methods, same parame
 
 Parameters: `self` and `model_path`.
 
+**Docstring:** start with `[3.3.1]`. Say that a quick first load reads only the file's information, that the real load starts at the longest trained context, that llama.cpp sets aside memory for the whole context up front so a too-large context fails to load and is halved and tried again (as long as half is not below `SMALLEST_CONTEXT`), and that any other kind of failure is passed straight on.
+
+1. Straight after the docstring come two imports, with a comment above them: from the module `llama_cpp`, import `Llama`; and from `llama_cpp.llama_chat_format`, import `Jinja2ChatFormatter`. Putting imports inside the method instead of at the top of the file means they only run when someone actually builds this backend, so the app still starts if `llama-cpp-python` is not installed. The comment should say so.
+2. Leave a blank line. Build a `Llama` with three keyword arguments, `model_path` set to `model_path`, `vocab_only` set to `True` and `verbose` set to `False`, and store it as `info`. `vocab_only` reads the file's information and vocabulary without the weights, so it is quick. It prints one harmless line about `n_ctx_train` to the terminal.
+3. `info.metadata` is a dictionary of everything the file says about itself. Read the key `"general.architecture"` from it and store it as `architecture`.
+4. The trained context is stored under a key named after the architecture, such as `qwen35.context_length`. Build that key with an f-string (`architecture` in braces, then `.context_length`), read it from `info.metadata`, turn the result into a whole number with `int(...)`, and store it as `size`.
+5. Leave a blank line. Start a `while True:` loop. Inside it, a `try:` block. Inside the `try`:
+   - Build a `Llama` and store it as `self.llm`. Pass four keyword arguments, one per line, each with a short comment where helpful: `model_path` set to `model_path`, `n_ctx` set to `size`, `n_gpu_layers` set to `-1` (which means "put every layer on the GPU"), and `verbose` set to `False`.
+   - Then `break`, to leave the loop.
+6. After the `try` block, `except ValueError as error:`. Inside it:
+   - An `if` with two conditions joined by `or`: the text `"llama_context"` is not in `str(error)` (write `not in`), **or** half the size (`size // 2`) is less than `SMALLEST_CONTEXT`. Inside it, a bare `raise`. A context that will not fit fails with the message "Failed to create llama_context"; anything else is a different problem, so it is passed on. Checking half the size, not the size itself, means the loop never tries a context below `SMALLEST_CONTEXT`, whatever number it started from.
+   - After that `if`, halve the size: set `size` to `size // 2`. Two slashes divide and drop any fraction.
+7. After the loop (back at the method's own indentation), store `size` as `self.context_size`.
+8. Leave a blank line. The chat template needs the text of the model's end and start markers. Call `info.detokenize` with a list containing `info.token_eos()` and the keyword argument `special` set to `True`, and store it as `end_token`. Do the same with `info.token_bos()` and store it as `start_token`. These come back as bytes, not strings.
+9. Build a `Jinja2ChatFormatter` and store it as `self.formatter`. Three keyword arguments, one per line:
+   - `template` set to `info.metadata` read with the key `"tokenizer.chat_template"`.
+   - `eos_token` set to `end_token.decode("utf-8", errors="ignore")`, which turns the bytes into a string.
+   - `bos_token` set to the same, made from `start_token`.
+
+#### 3.3.2 Method `build_prompt`
+
+*Answer key: `[3.3.2]`.*
+
+Parameters: `self`, `messages` and `thinking`.
+
+**Docstring:** start with `[3.3.2]`. Say that the formatter fills in the model's own chat template, that `enable_thinking` is a setting many templates (Qwen's among them) read to decide whether the model thinks first, and that templates that do not know it ignore it.
+
+1. Call `self.formatter` as if it were a function, with two keyword arguments: `messages` set to `messages` and `enable_thinking` set to `thinking`. It hands back an object whose `.prompt` attribute is the finished string. `return` that attribute, in one line.
+
+#### 3.3.3 Method `count_tokens`
+
+*Answer key: `[3.3.3]`.*
+
+Parameters: `self` and `prompt`.
+
+**Docstring:** start with `[3.3.3]`. Say that `tokenize` needs bytes, so the text is encoded first, and that `special=True` counts markers such as `<|im_start|>` as the single tokens they really are.
+
+1. Call `self.llm.tokenize` with `prompt.encode("utf-8")` as its positional argument and two keyword arguments, `add_bos` set to `False` and `special` set to `True`. Store the result, a list of token numbers, as `tokens`.
+2. `return` the length of `tokens`.
+
+#### 3.3.4 Method `stream`
+
+*Answer key: `[3.3.4]`.*
+
+Parameters: `self`, `prompt` and `temperature`. This method is a **generator**.
+
+**Docstring:** start with `[3.3.4]`. Say that with `stream=True`, `create_completion` hands back a series of small chunks instead of one finished answer, where each chunk's new text sits, and that empty pieces are skipped.
+
+1. Call `self.llm.create_completion` and store what comes back as `chunks`. One positional argument, `prompt`, then three keyword arguments, one per line: `max_tokens` set to `MAX_NEW_TOKENS`, `temperature` set to `temperature`, and `stream` set to `True`.
+2. Write a `for` loop over `chunks`, naming the loop variable `chunk`. Inside it:
+   - The new text lives under key `"choices"`, then index `0`, then key `"text"`. Chain three sets of square brackets to reach it and store it as `text`.
+   - `if text:` then `yield text`.
+
+There is no `return` line. The generator ends when the loop ends.
+
+### 3.4 The class `TransformersBackend`
+
+*Answer key: `[3.4]`.*
+
+Define a class named `TransformersBackend` that also inherits from `Backend`. Same four methods, same parameters, different insides.
+
+**Docstring:** start with `[3.4]`. Say that it runs a folder of safetensors weights through PyTorch, and how: a tokenizer turns text into numbers, the model predicts more numbers, and the tokenizer turns them back into text.
+
+#### 3.4.1 Method `__init__`
+
+*Answer key: `[3.4.1]`.*
+
+Parameters: `self` and `model_path`.
+
 Here `model_path` is a **folder**, not a file. The folder holds `config.json`, the tokenizer files, and one or more `.safetensors` weight files.
 
-**Docstring:** start with `[3.3.1]`. Say that it loads the tokenizer and the model from the folder, and moves the model to the graphics card if there is one.
+**Docstring:** start with `[3.4.1]`. Say that it loads the tokenizer and the model from the folder, moves the model to the graphics card if there is one, and reads the longest trained context from the model's config.
 
 1. Two imports inside the method: import `torch`, and from `transformers` import two names on one line, `AutoModelForCausalLM` and `AutoTokenizer`.
 2. Decide which device to use. Write an `if` / `else`: if `torch.cuda.is_available()` returns true, set `self.device` to the string `"cuda"`; otherwise set it to `"cpu"`.
 3. Load the tokenizer: call `AutoTokenizer.from_pretrained` with `model_path` as its one positional argument, and store the result as `self.tokenizer`. Note there is no `()` after `AutoTokenizer`. `from_pretrained` is a method you call on the class itself, and it builds the object for you.
 4. Load the model the same way: call `AutoModelForCausalLM.from_pretrained` with `model_path` as the positional argument and one keyword argument, `dtype` set to the string `"auto"`. That means "keep the number format the weights were saved in", usually 16-bit, rather than 32-bit, which would take twice the memory. Store it as `self.model`. In transformers 5, `"auto"` is already the default, so writing it out only makes the choice visible; older versions loaded 32-bit unless told otherwise.
 5. Move the model onto the device: call `.to` on `self.model`, passing `self.device`. You do not need to store the result.
+6. Leave a blank line. Some models keep their text settings in a section of their config. Call `self.model.config.get_text_config()` and store the result as `text_config`. Then set `self.context_size` to `text_config.max_position_embeddings`, the longest context the model was trained for.
 
-#### 3.3.2 Method `chat`
+#### 3.4.2 Method `build_prompt`
 
-*Answer key: `[3.3.2]`.*
+*Answer key: `[3.4.2]`.*
 
-Parameters: `self` and `messages`. This is a generator too.
+Parameters: `self`, `messages` and `thinking`.
+
+**Docstring:** start with `[3.4.2]`. Say that `apply_chat_template` fills in the chat template, that `tokenize=False` asks for text rather than token numbers, that `add_generation_prompt` adds the "your turn" marker, and that extra settings such as `enable_thinking` are handed to the template.
+
+1. `return` the result of calling `self.tokenizer.apply_chat_template` with `messages` as the positional argument and three keyword arguments, one per line: `add_generation_prompt` set to `True`, `tokenize` set to `False`, and `enable_thinking` set to `thinking`.
+
+#### 3.4.3 Method `count_tokens`
+
+*Answer key: `[3.4.3]`.*
+
+Parameters: `self` and `prompt`.
+
+**Docstring:** start with `[3.4.3]`. Say that calling the tokenizer on text gives back a dictionary whose `"input_ids"` are the token numbers, and that `add_special_tokens=False` stops it adding markers the template has already written.
+
+1. Call `self.tokenizer` as a function with `prompt` and the keyword argument `add_special_tokens` set to `False`. Store the result as `tokens`.
+2. `return` the length of `tokens` read with the key `"input_ids"`.
+
+#### 3.4.4 Method `stream`
+
+*Answer key: `[3.4.4]`.*
+
+Parameters: `self`, `prompt` and `temperature`. This is a generator too.
 
 The difficulty here is that the model's `generate` method does not return until the whole reply is written. To get words out while it is still working, you give it a **streamer** to write into, run `generate` on its own thread, and read from the streamer on this one.
 
-**Docstring:** start with `[3.3.2]`. Name the four stages: turn messages into token numbers, make a streamer, start `generate` on its own thread, pass each piece on. Then put a one-line comment above each stage in the body, starting `Stage 1:`, `Stage 2:` and so on (no tag needed on these).
+**Docstring:** start with `[3.4.4]`. Name the four stages: turn the prompt into token numbers, make a streamer, start `generate` on its own thread, pass each piece on. Then put a one-line comment above each stage in the body, starting `Stage 1:`, `Stage 2:` and so on (no tag needed on these).
 
 1. The first line after the docstring is an import: from `transformers`, import `TextIteratorStreamer`.
-2. **Stage 1.** Call `apply_chat_template` on `self.tokenizer` and store the result as `inputs`. One positional argument, `messages`, then three keyword arguments:
-   - `add_generation_prompt` set to `True`. This appends the marker that tells the model "now it is your turn".
-   - `return_tensors` set to the string `"pt"`, meaning PyTorch tensors.
-   - `return_dict` set to `True`, so you get back a dictionary-like object holding both the token ids and the attention mask.
+2. **Stage 1.** Call `self.tokenizer` as a function with `prompt` and two keyword arguments, `add_special_tokens` set to `False` and `return_tensors` set to the string `"pt"` (PyTorch tensors). Store the result as `inputs`.
 3. Still Stage 1: reassign `inputs` to the result of calling `.to` on it with `self.device`. For this particular object, `.to` moves the data where it sits and hands back the same object, so storing the result changes nothing here. Store it anyway, because that is the safe habit: on a plain PyTorch tensor, `.to` leaves the original where it is and hands back a moved copy.
-4. **Stage 2.** Build a `TextIteratorStreamer` and store it as `streamer`. One positional argument, `self.tokenizer`, then two keyword arguments:
+4. **Stage 2.** Build a `TextIteratorStreamer` and store it as `streamer`. One positional argument, `self.tokenizer`, then two keyword arguments, each with a short comment:
    - `skip_prompt` set to `True`, so it does not repeat the conversation back to you.
    - `skip_special_tokens` set to `True`, so markers like end-of-turn are left out.
-5. **Stage 3.** Collect the arguments for `generate` in a dictionary:
+5. **Stage 3.** Put a second comment line under the Stage 3 comment saying that a temperature of 0 means "always pick the likeliest word" and anything higher samples. Then collect the arguments for `generate` in a dictionary:
    - Create a variable named `settings` by calling `dict` on `inputs`. That copies everything in `inputs` into an ordinary dictionary.
    - Add a key to it: `settings`, square brackets around the string `"max_new_tokens"`, set equal to `MAX_NEW_TOKENS`.
    - Add another the same way: the key `"streamer"`, set to `streamer`.
+   - `if temperature > 0:` set the key `"do_sample"` to `True` and the key `"temperature"` to `temperature`. `else:` set `"do_sample"` to `False`.
 6. Still Stage 3: create a `threading.Thread` with three keyword arguments: `target` set to `self.model.generate` (no parentheses, you are handing over the method), `kwargs` set to `settings`, and `daemon` set to `True`. Store it as `thread`. `kwargs` means "call the target with these as keyword arguments". Then call `.start()` on `thread`.
 7. **Stage 4.** Write a `for` loop over `streamer`, naming the loop variable `text`. Inside it, write `if text:` and inside that, `yield text`. Some pieces arrive empty, and the `if` skips them. The loop ends on its own when `generate` finishes.
 
-### 3.4 The function `load_backend`
+### 3.5 The function `load_backend`
 
-*Answer key: `[3.4]`.*
+*Answer key: `[3.5]`.*
 
-Back at zero indentation (outside both classes), define a function named `load_backend` with two parameters: `kind` and `model_path`.
+Back at zero indentation (outside all three classes), define a function named `load_backend` with two parameters: `kind` and `model_path`.
 
-**Docstring:** start with `[3.4]`. Say that it builds and returns the backend named by `kind`, and that this is the only place that knows both classes exist; everything else just loops over `chat`.
+**Docstring:** start with `[3.5]`. Say that it builds and returns the backend named by `kind`, and that this is the only place that knows both classes exist; everything else just loops over `chat`.
 
 1. If `kind` equals the string `"llama_cpp"` (equality is two equals signs), `return` a new `LlamaCppBackend` built with `model_path`.
 2. If `kind` equals the string `"pytorch"`, `return` a new `TransformersBackend` built with `model_path`.
 3. If neither matched, `raise` a `ValueError` whose message is an f-string reading `Unknown backend: ` followed by `kind` in braces. Because each branch above returns, you can write plain `if`s with no `else`: reaching this line already means nothing matched.
 
-### 3.5 Checkpoint: test it without a window
+### 3.6 Checkpoint: test it without a window
 
 From inside `my_build/`, start the Python prompt by running `python` with no arguments. Then, one line at a time:
 
 1. From `backends`, import `load_backend`.
 2. Call it with two arguments, the kind string and the full path to a model from step 1.6, and store the result in a variable. The kind is `"llama_cpp"` for the `.gguf` file and `"pytorch"` for the folder. Put an `r` before the opening quote of a Windows path so the backslashes are taken literally.
-3. Make a list containing one dictionary, with `"role"` set to `"user"` and `"content"` set to a question, and store it in a variable.
-4. Write a `for` loop over a call to `.chat` on your backend variable, passing that list. Inside the loop, call `print` with the loop variable and two keyword arguments: `end` set to an empty string (so each piece continues on the same line) and `flush` set to `True` (so it shows at once). At the Python prompt, press Enter on an empty line to run the loop.
+3. Print the variable's `context_size` attribute. For the test models it should be `262144`.
+4. Make a list containing one dictionary, with `"role"` set to `"user"` and `"content"` set to a question, and store it in a variable.
+5. Write a `for` loop over a call to `.chat` on your backend variable. Pass four arguments: your list, an empty string for the system prompt, `0.7` for the temperature, and `False` for thinking. Inside the loop, call `print` with the loop variable and two keyword arguments: `end` set to an empty string (so each piece continues on the same line) and `flush` set to `True` (so it shows at once). At the Python prompt, press Enter on an empty line to run the loop.
 
-If a sentence types itself out a few characters at a time, this file is done. Do it once for each kind, using the two model paths from step 1.6.
+If a sentence types itself out a few characters at a time, this file is done. Do it once for each kind.
 
-The PyTorch backend prints several lines to the terminal while it loads and generates (a "fast path is not available" notice, some `[ERROR] ... not documented` lines, and "Setting `pad_token_id`"). They come from the transformers library, they are harmless, and the answer key prints them too. Loading the PyTorch model takes about 25 seconds; the GGUF takes about 2.
+Both backends print some harmless lines to the terminal. llama.cpp prints one line ending `possible training context overflow` during the quick first load. The PyTorch backend prints a "fast path is not available" notice, some `[ERROR] ... not documented` lines, and "Setting `pad_token_id`" (plus a note about generation flags when the temperature is 0). Loading the PyTorch model takes about 25 seconds; the GGUF takes about 2. The answer key prints all of these too.
 
 ## Step 4: `app.py`
 
 The window is built with `tkinter`, which comes with Python.
 
-Before you start, understand the one hard idea in this file. Loading a model and generating a reply are slow. If you do slow work directly inside a button's function, the window freezes until it finishes. So slow work runs on a second **thread**. But tkinter is built around the main thread, the one that created the window. Python can pass widget calls over to it from other threads, but that is fragile, so this app follows a strict rule: only the main thread ever touches a widget. The bridge between the two is a **queue**: the worker thread puts its results into the queue, and the main thread checks the queue twenty times a second and updates the window. Steps 4.8 to 4.11 exist only to do that.
+Before you start, understand the one hard idea in this file. Loading a model and generating a reply are slow. If you do slow work directly inside a button's function, the window freezes until it finishes. So slow work runs on a second **thread**. But tkinter is built around the main thread, the one that created the window. Python can pass widget calls over to it from other threads, but that is fragile, so this app follows a strict rule: only the main thread ever touches a widget. The bridge between the two is a **queue**: the worker thread puts its results into the queue, and the main thread checks the queue twenty times a second and updates the window. Steps 4.10 to 4.13 exist only to do that.
 
 Streaming rides on the same queue. Instead of one result per reply, the worker puts in one small result per piece of text, and a last one to say the reply is finished.
 
+The same rule decides where settings are read. The system prompt, the temperature and the thinking switch all live in widgets, so `send` reads them on the main thread and hands the worker plain values.
+
 ### 4.1 Top of the file
 
-*Answer key: `[4.1]` in `app.py` (it appears twice, on the module docstring and on the constant).*
+*Answer key: `[4.1]` in `app.py` (it appears twice, on the module docstring and on the constants).*
 
 1. A module docstring. Start with `[4.1]`, then say what the file is, how it works (one class for the window, slow work on a second thread, results coming back through a queue, replies arriving a few characters at a time), and how to run it.
 2. Imports, in this order:
@@ -282,7 +389,10 @@ Streaming rides on the same queue. Instead of one result per reply, the worker p
    - `tkinter`, renamed to `tk` with the `as` keyword, so you can write `tk.Button` instead of `tkinter.Button`.
    - From `tkinter`, import two submodules on one line: `filedialog` and `scrolledtext`.
    - A blank line, then from your own `backends` file, import `load_backend`. No `.py` in the name.
-3. One constant, with a comment above it that starts with the tag `[4.1]`: `POLL_INTERVAL_MS`, set to `50`.
+3. A comment line starting with the tag `[4.1]` that says these are timing and the starting values of the settings. Under it, three constants, the first two with a short comment after them on the same line:
+   - `POLL_INTERVAL_MS`, set to `50`.
+   - `DEFAULT_TEMPERATURE`, set to `0.7`.
+   - `DEFAULT_THINKING_INSTRUCTIONS`, set to the string `"Think through the question step by step before you answer."`. A long string can sit inside parentheses on its own line.
 
 ### 4.2 The class `ChatApp`
 
@@ -290,9 +400,9 @@ Streaming rides on the same queue. Instead of one result per reply, the worker p
 
 Define a class named `ChatApp`.
 
-**Docstring:** start with `[4.2]`. Say that it is the whole window. Then, setting aside the setup methods (`__init__`, `build_widgets`) and the three small helpers (`start_worker`, `append_chat`, `set_busy`), describe the three groups the other methods fall into: button handlers that run on the main thread, workers that run on a second thread, and `poll_results`, which carries the workers' results back.
+**Docstring:** start with `[4.2]`. Say that it is the whole window. Then, setting aside the setup methods (`__init__`, `build_widgets`) and the three small helpers (`start_worker`, `append_chat`, `set_busy`), describe the three groups the other methods fall into: button handlers that run on the main thread (`browse`, `open_thinking_window`, `save_thinking_instructions`, `load_model`, `send`), workers that run on a second thread (`load_worker`, `reply_worker`), and `poll_results`, which carries the workers' results back.
 
-Steps 4.3 to 4.13 are its methods, in order.
+Steps 4.3 to 4.15 are its methods, in order.
 
 ### 4.3 Method `__init__`
 
@@ -304,19 +414,20 @@ Parameters: `self` and `root`. `root` is the main window object, which `main` wi
 
 1. Store `root` as `self.root`.
 2. Call `title` on `self.root` with the string `"VoxMux"`.
-3. Call `geometry` on `self.root` with the string `"700x500"` (width, a lowercase x, height).
-4. Create five attributes that hold the app's state. Put a short comment after each one, on the same line.
+3. Call `geometry` on `self.root` with the string `"800x600"` (width, a lowercase x, height).
+4. Create six attributes that hold the app's state. Put a short comment after each of the first five, on the same line.
    - `self.backend`, set to `None`. It will hold the loaded model.
    - `self.model_path`, set to an empty string. It will hold what the user picked.
    - `self.messages`, set to an empty list. It will hold the whole conversation.
    - `self.busy`, set to `False`. It is `True` while a worker thread is running.
    - `self.results`, set to a new `queue.Queue()`. This is how worker threads report back.
+   - `self.thinking_instructions`, set to `DEFAULT_THINKING_INSTRUCTIONS`.
 5. Call `self.build_widgets()`.
 6. Call `self.poll_results()`. This starts the twenty-times-a-second check, which then keeps itself going.
 
 ### 4.4 Method `build_widgets`
 
-*Answer key: `[4.4]`, with one tagged comment per block: `[4.4.1]` to `[4.4.4]`.*
+*Answer key: `[4.4]`, with one tagged comment per block: `[4.4.1]` to `[4.4.6]`.*
 
 Parameters: just `self`.
 
@@ -324,24 +435,40 @@ Parameters: just `self`.
 
 Every tkinter widget follows the same two-step pattern. First you **create** it, passing its parent as the first positional argument and options as keyword arguments. Then you **place** it by calling `.pack(...)` on it. If you need to talk to the widget later, store it on `self` first and pack on the next line. If you never need it again, you can create and pack in one chained expression.
 
-Build these four blocks in this order. Put a comment above each block starting with its tag.
+Build these six blocks in this order. Put a comment above each block starting with its tag.
 
 #### 4.4.1 The top row
 
 1. Create a `tk.Frame` whose parent is `self.root`. Store it in a local variable named `top` (not on `self`, nothing else needs it). A frame is an invisible box for grouping widgets.
 2. Pack `top` with `fill` set to `"x"` (stretch horizontally), and `padx` and `pady` both set to `8`.
-3. Create a `tk.StringVar` with the keyword argument `value` set to `"llama_cpp"`, and store it as `self.backend_kind`. A `StringVar` is a little box holding a string that widgets can share. Whichever radio button is selected writes its value into it.
+3. Create a `tk.StringVar` with the keyword argument `value` set to `"llama_cpp"`, and store it as `self.backend_kind`. A `StringVar` is a little box holding a string that widgets can share. Whichever radio button is selected writes its value into it. Put a two-line comment above it saying so.
 4. Create a `tk.Radiobutton` with parent `top` and three keyword arguments: `text` set to `"llama.cpp (GGUF)"`, `variable` set to `self.backend_kind`, and `value` set to `"llama_cpp"`. Chain `.pack` straight onto it with `side` set to `"left"`.
 5. Create a second `tk.Radiobutton` the same way: `text` is `"PyTorch (safetensors)"`, same `variable`, and `value` is `"pytorch"`. Pack it to the left too. These two value strings must match the ones `load_backend` checks for, exactly.
 6. Create a `tk.Button` with parent `top`, `text` set to `"Browse..."`, and `command` set to `self.browse` (no parentheses: you are handing over the method, not calling it). Chain `.pack` with `side` set to `"left"` and `padx` set to `8`.
 7. Create another `tk.Button` with parent `top`, `text` set to `"Load"`, and `command` set to `self.load_model`. This one you need later, so store it as `self.load_button`, then pack it on the next line with `side` set to `"left"`.
 
-#### 4.4.2 The status line
+#### 4.4.2 The settings row
+
+1. Create a `tk.Frame` with parent `self.root`, stored in a local variable named `settings`, and pack it with `fill` set to `"x"` and `padx` set to `8`.
+2. Create a `tk.Label` with parent `settings` and `text` set to `"Temperature"`, and chain `.pack` with `side` set to `"left"`.
+3. Create a `tk.DoubleVar` (a box holding a decimal number) with `value` set to `DEFAULT_TEMPERATURE`, and store it as `self.temperature`.
+4. Create a `tk.Scale` (a slider) with parent `settings` and six keyword arguments: `variable` set to `self.temperature`, `from_` set to `0` (the trailing underscore is because `from` on its own is a Python keyword), `to` set to `2`, `resolution` set to `0.1`, `orient` set to `"horizontal"`, and `length` set to `160`. Chain `.pack` with `side` set to `"left"` and `padx` set to the tuple `(4, 16)`.
+5. Create a `tk.BooleanVar` with `value` set to `False`, and store it as `self.thinking`.
+6. Create a `tk.Checkbutton` with parent `settings`, `text` set to `"Thinking mode"`, and `variable` set to `self.thinking`. Chain `.pack` with `side` set to `"left"`. Ticking the box sets the variable to `True`.
+7. Create a `tk.Button` with parent `settings`, `text` set to `"Thinking instructions..."`, and `command` set to `self.open_thinking_window`. Chain `.pack` with `side` set to `"left"` and `padx` set to `8`.
+
+#### 4.4.3 The system prompt box
+
+1. Create a `tk.Label` with parent `self.root`, `text` set to `"System prompt:"`, and `anchor` set to `"w"`. Chain `.pack` with `fill` set to `"x"`, `padx` set to `8`, and `pady` set to the tuple `(8, 0)`.
+2. Create a `tk.Text` (a box that holds several lines) with parent `self.root`, `height` set to `3` (lines), and `wrap` set to `"word"`. Store it as `self.system_box`.
+3. Pack it with `fill` set to `"x"` and `padx` set to `8`.
+
+#### 4.4.4 The status line
 
 1. Create a `tk.Label` with parent `self.root`, `text` set to `"No model loaded."`, and `anchor` set to `"w"` (west, so the text hugs the left edge). Store it as `self.status`.
-2. Pack it with `fill` set to `"x"` and `padx` set to `8`.
+2. Pack it with `fill` set to `"x"`, `padx` set to `8`, and `pady` set to the tuple `(8, 0)`.
 
-#### 4.4.3 The bottom row
+#### 4.4.5 The bottom row
 
 This is built before the chat log on purpose: tkinter gives space to widgets in the order they are packed, so packing this first keeps it visible when the window shrinks. Say so in this block's comment.
 
@@ -353,7 +480,7 @@ This is built before the chat log on purpose: tkinter gives space to widgets in 
 6. Create a `tk.Button` with parent `bottom`, `text` set to `"Send"`, and `command` set to `self.send`. Store it as `self.send_button`.
 7. Pack it with `side` set to `"left"` and `padx` set to the tuple `(8, 0)`, meaning 8 pixels of space on its left and none on its right.
 
-#### 4.4.4 The chat log
+#### 4.4.6 The chat log
 
 1. Create a `scrolledtext.ScrolledText` with parent `self.root`, `wrap` set to `"word"` (break lines between words), and `state` set to `"disabled"` (read-only, so the user cannot type into the history). Store it as `self.chat_log`.
 2. Pack it with `fill` set to `"both"`, `expand` set to `True`, and `padx` and `pady` both `8`. It takes whatever space is left.
@@ -375,58 +502,88 @@ Parameters: just `self`. Runs when the Browse button is clicked.
 
 From here on, "set the status text to X" always means this same call: `.config` on `self.status` with `text` set to X. And wherever a status message has a label like `Ready:` or `Error:`, put one space after the colon.
 
-### 4.6 Method `load_model`
+### 4.6 Method `open_thinking_window`
 
 *Answer key: `[4.6]`.*
 
+Parameters: just `self`. Runs when the Thinking instructions button is clicked.
+
+**Docstring:** start with `[4.6]`. Say that a `Toplevel` is a second window belonging to the main one, that it holds a text box filled with the current instructions and a Save button, and why the button's command is a `lambda`: it has to tell `save_thinking_instructions` which window and which box to use.
+
+1. Create a `tk.Toplevel` with parent `self.root` and store it in a local variable named `window`. Call `title` on it with `"Thinking mode instructions"`.
+2. Create a `tk.Label` with parent `window`, `text` set to `"Added to the system prompt whenever Thinking mode is on:"`, and `anchor` set to `"w"`. Chain `.pack` with `fill` set to `"x"`, `padx` set to `8`, and `pady` set to `(8, 0)`.
+3. Create a `tk.Text` with parent `window`, `width` set to `60`, `height` set to `8`, and `wrap` set to `"word"`. Store it in a local variable named `box`, and pack it with `fill` set to `"both"`, `expand` set to `True`, and `padx` and `pady` both `8`.
+4. Fill the box: call `.insert` on `box` with `"1.0"` (line 1, character 0, the very start) and `self.thinking_instructions`.
+5. Create a `tk.Button` with parent `window`, `text` set to `"Save"`, and `command` set to a `lambda` with no parameters that calls `self.save_thinking_instructions` with `window` and `box`. Chain `.pack` with `pady` set to `(0, 8)`.
+
+### 4.7 Method `save_thinking_instructions`
+
+*Answer key: `[4.7]`.*
+
+Parameters: `self`, `window` and `box`. Runs when that Save button is clicked.
+
+**Docstring:** start with `[4.7]`. Say that a `Text` widget's contents run from `"1.0"` to `"end"`, and that Tk always adds a newline at the end, so the text is stripped before it is kept.
+
+1. Call `.get` on `box` with `"1.0"` and `"end"`, chain `.strip()` onto it, and store the result as `self.thinking_instructions`.
+2. Call `.destroy()` on `window` to close it.
+
+### 4.8 Method `load_model`
+
+*Answer key: `[4.8]`.*
+
 Parameters: just `self`. Runs when the Load button is clicked.
 
-**Docstring:** start with `[4.6]`. Say that it only *starts* the loading: it greys out the buttons, updates the status, hands the slow part to a thread, and returns at once.
+**Docstring:** start with `[4.8]`. Say that it only *starts* the loading: it greys out the buttons, updates the status, hands the slow part to a thread, and returns at once.
 
 1. Guard first. If `self.model_path` is empty (`if not self.model_path:`), set the status text to `"Pick a model with Browse first."` and then write a bare `return` to leave the method early.
 2. Call `self.set_busy` with `True`.
 3. Set the status text to `"Loading model..."`.
 4. Call `self.start_worker` with three positional arguments: `self.load_worker` (the method itself, no parentheses), the result of `self.backend_kind.get()`, and `self.model_path`.
 
-### 4.7 Method `send`
+### 4.9 Method `send`
 
-*Answer key: `[4.7]`.*
+*Answer key: `[4.9]`.*
 
 Parameters: `self`, and `event` with a default value of `None`.
 
 Why the default? This method gets called two ways. The Send button calls it with no arguments. The Enter key binding calls it with one argument, an event object describing the keypress. A default lets one method serve both. You never use `event`; it just has to be accepted.
 
-**Docstring:** start with `[4.7]`. Say that it adds the user's message and asks for a reply, explain the `event` parameter, and note that it writes the label `Model: ` with nothing after it, ready for the reply's words to be added as they arrive through the queue.
+**Docstring:** start with `[4.9]`. Say that it adds the user's message and asks for a reply, explain the `event` parameter, say that every setting is read from its widget here, on the main thread, and handed to the worker as plain values, and note that it writes the label `Model: ` with nothing after it, ready for the reply's words.
 
 1. Read the entry box by calling `.get()` on `self.entry`, chain `.strip()` onto that to remove spaces from both ends, and store the result as `text`.
 2. Guard: if `text` is empty, **or** `self.backend` is `None`, **or** `self.busy` is true, `return` early. Use `not text` for the first test, `is None` for the second, and join the three with the word `or`.
-3. Clear the entry box: call `.delete` on `self.entry` with the integer `0` and the string `"end"`.
-4. Add the user's message to the conversation: call `.append` on `self.messages`, passing a dictionary with `"role"` set to `"user"` and `"content"` set to `text`.
-5. Show it: call `self.append_chat` with one argument, an f-string made of: `You:`, a space, `text` in braces, two newline escapes (`\n\n`), then `Model:` and a space. Nothing comes after that last space; the reply will be added there piece by piece.
-6. Call `self.set_busy` with `True`.
-7. Set the status text to `"Thinking..."`.
-8. Call `self.start_worker` with one argument, `self.reply_worker`.
+3. Leave a blank line. Read the settings:
+   - Call `.get` on `self.system_box` with `"1.0"` and `"end"`, chain `.strip()`, and store it as `system_prompt`.
+   - Call `.get()` on `self.temperature` and store it as `temperature`.
+   - Call `.get()` on `self.thinking` and store it as `thinking`.
+4. `if thinking and self.thinking_instructions:` (both true), add the instructions to the system prompt: set `system_prompt` to `system_prompt` plus `"\n\n"` plus `self.thinking_instructions`, then on the next line set `system_prompt` to `system_prompt.strip()` (in case the system prompt box was empty).
+5. Leave a blank line. Clear the entry box: call `.delete` on `self.entry` with the integer `0` and the string `"end"`.
+6. Add the user's message to the conversation: call `.append` on `self.messages`, passing a dictionary with `"role"` set to `"user"` and `"content"` set to `text`.
+7. Show it: call `self.append_chat` with one argument, an f-string made of: `You:`, a space, `text` in braces, two newline escapes (`\n\n`), then `Model:` and a space. Nothing comes after that last space; the reply will be added there piece by piece.
+8. Leave a blank line. Call `self.set_busy` with `True`.
+9. Set the status text to `"Writing a reply..."`.
+10. Call `self.start_worker` with four arguments: `self.reply_worker`, `system_prompt`, `temperature` and `thinking`.
 
-### 4.8 Method `start_worker`
+### 4.10 Method `start_worker`
 
-*Answer key: `[4.8]`.*
+*Answer key: `[4.10]`.*
 
 Parameters: `self`, `target`, and `*args`.
 
-The asterisk is new. `*args` in a parameter list means "collect any further positional arguments into a tuple named `args`". It lets this one helper start a worker that needs two arguments (loading) or none (replying).
+The asterisk is new. `*args` in a parameter list means "collect any further positional arguments into a tuple named `args`". It lets this one helper start a worker that needs two arguments (loading) or three (replying).
 
-**Docstring:** start with `[4.8]`. Say that it runs `target` on a new background thread so the window does not freeze, and what `daemon` means.
+**Docstring:** start with `[4.10]`. Say that it runs `target` on a new background thread so the window does not freeze, and what `daemon` means.
 
 1. Create a `threading.Thread` with three keyword arguments: `target` set to `target`, `args` set to `args`, and `daemon` set to `True`. A daemon thread is dropped automatically when you close the window, instead of keeping the program alive. Store it in a local variable named `thread`.
 2. Call `.start()` on it.
 
-### 4.9 Method `load_worker`
+### 4.11 Method `load_worker`
 
-*Answer key: `[4.9]`.*
+*Answer key: `[4.11]`.*
 
 Parameters: `self`, `kind`, and `model_path`. **This method runs on the worker thread, so it must not touch any widget.** It only does the slow work and puts a result in the queue.
 
-**Docstring:** start with `[4.9]`. Say that it runs on the background thread, loads a model, and reports through the queue as a pair of a label and a value, including when something goes wrong.
+**Docstring:** start with `[4.11]`. Say that it runs on the background thread, loads a model, and reports through the queue as a pair of a label and a value, including when something goes wrong.
 
 1. Open a `try:` block. Inside it:
    - Call `load_backend` with `kind` and `model_path` and store the result as `backend`.
@@ -436,88 +593,91 @@ Parameters: `self`, `kind`, and `model_path`. **This method runs on the worker t
 
 Catching `Exception` broadly is usually bad style, but here it is right. Without it, an error on the worker thread would only print a traceback in the terminal. The window would never hear about it, so the status would stay on "Loading model..." and Load and Send would stay greyed out for good. Catching it lets the error show in the status line instead.
 
-### 4.10 Method `reply_worker`
+### 4.12 Method `reply_worker`
 
-*Answer key: `[4.10]`.*
+*Answer key: `[4.12]`.*
 
-Parameters: just `self`. Also runs on the worker thread.
+Parameters: `self`, `system_prompt`, `temperature` and `thinking`. Also runs on the worker thread.
 
 This is where the streamed pieces are turned into queue results. It keeps two strings: `reply`, everything the model has written so far, and `shown`, the part already sent to the window. After each new piece it works out what is in `reply` but not yet in `shown`, and sends just that. Comparing against a *stripped* copy of the reply means blank space at the very start or end is never shown, because trailing blank space only gets sent once real text follows it.
 
-**Docstring:** start with `[4.10]`. Say that it streams a reply into the queue, that the whole conversation is sent every time (which is how the model remembers earlier turns), and how `reply` and `shown` work together.
+Thinking mode adds one twist. The model writes its reasoning first and ends it with the marker `</think>`, then writes the answer. The log shows that marker as `[end of thinking]`, and only the answer after it is kept in the conversation, so old reasoning does not eat into the context.
 
-1. Open a `try:` block. Items 2 to 4 are inside it.
+**Docstring:** start with `[4.12]`. Say that it streams a reply into the queue, that the whole conversation is sent every time (which is how the model remembers earlier turns, and the backend forgets the oldest if they no longer fit), how `reply` and `shown` work together, and what happens to `</think>`.
+
+1. Open a `try:` block. Items 2 to 5 are inside it.
 2. Create two variables, both set to an empty string, each with a short comment after it on the same line: `reply` and `shown`.
-3. Write a `for` loop over a call to `.chat` on `self.backend`, passing `self.messages`. Name the loop variable `piece`. Inside the loop:
+3. Write a `for` loop over a call to `.chat` on `self.backend`, passing four arguments: `self.messages`, `system_prompt`, `temperature` and `thinking`. Name the loop variable `piece`. Inside the loop:
    - Set `reply` to `reply` plus `piece`. The plus sign joins two strings.
-   - Call `.strip()` on `reply` and store the result as `visible`.
-   - Find where the new part begins: call `len` on `shown` to get its length in characters, and store that number as `start`.
+   - Call `.replace` on `reply` with `"</think>"` and `"\n[end of thinking]"`, chain `.strip()` onto it, and store the result as `visible`.
+   - Find where the new part begins: call `len` on `shown` to get its length in characters, and store that number as `start`, with a short comment.
    - Take the new part: slice `visible` from `start` to the end. A slice is square brackets with a colon: the start value, then a colon, then nothing. Store it as `new_text`.
    - Write `if new_text:` and inside it do two things: put the tuple `("piece", new_text)` into `self.results`, and set `shown` to `visible`.
-4. After the loop, but still inside the `try:` block, put the tuple `("reply", shown)` into `self.results`. This tells the main thread the reply is finished and hands over the complete text.
-5. In `except Exception as error:`, put the tuple `("error", str(error))` into `self.results`.
+4. After the loop, keep only the answer: call `.split` on `reply` with `"</think>"`, which gives a list of the parts between markers. Take the last part with index `-1`, chain `.strip()`, and store it as `answer`. With no marker in the reply, the list has one part, the whole reply.
+5. Put the tuple `("reply", answer)` into `self.results`. This tells the main thread the reply is finished and hands over the text to keep.
+6. In `except Exception as error:`, put the tuple `("error", str(error))` into `self.results`.
 
-### 4.11 Method `poll_results`
+### 4.13 Method `poll_results`
 
-*Answer key: `[4.11]`.*
+*Answer key: `[4.13]`.*
 
 Parameters: just `self`. Runs on the main thread, twenty times a second, for as long as the window is open. This is the other end of the queue.
 
-**Docstring:** start with `[4.11]`. Say that it empties the queue, updates the window for each result, and then schedules itself to run again. Note that a `"piece"` means more is coming, so the buttons stay greyed out, while the other three results mean the work is over.
+**Docstring:** start with `[4.13]`. Say that it empties the queue, updates the window for each result, and then schedules itself to run again. Note that a `"piece"` means more is coming, so the buttons stay greyed out, while the other three results mean the work is over.
 
 1. Start a `while` loop that runs as long as the queue is not empty: the condition is `not` followed by a call to `.empty()` on `self.results`.
 2. Inside the loop, call `.get()` on `self.results`. It returns one of your two-item tuples. *Unpack* it into two variables on one line by writing both names separated by a comma on the left of the equals sign: `kind` and `value`.
 3. Still inside the loop, a chain on `kind` with four branches: one `if` and three `elif`s.
    - If it equals `"piece"`: call `self.append_chat` with `value`. Nothing else. The reply is still coming, so the buttons must stay greyed out.
    - Else if it equals `"reply"`: append a dictionary to `self.messages` with `"role"` set to `"assistant"` and `"content"` set to `value`; call `self.append_chat` with a string of two newline escapes (`"\n\n"`) to leave a blank line before the next message; set the status text to an f-string reading `Ready:`, a space, then `self.model_path` in braces; and call `self.set_busy` with `False`.
-   - Else if it equals `"loaded"`: set `self.backend` to `value`, reset `self.messages` to an empty list (a new model starts a new conversation), set the status text to the same `Ready:` f-string, and call `self.set_busy` with `False`.
+   - Else if it equals `"loaded"`: set `self.backend` to `value`; reset `self.messages` to an empty list (a new model starts a new conversation); store `value.context_size` in a local variable named `size`; set the status text to an f-string reading `Ready:`, a space, `self.model_path` in braces, a space, then in round brackets `size` in braces followed by ` tokens of context`; and call `self.set_busy` with `False`.
    - Else if it equals `"error"`: set the status text to an f-string reading `Error:`, a space, then `value` in braces, and call `self.set_busy` with `False`.
 4. Notice that `set_busy(False)` is written inside three of the branches and not after the chain. If it ran for every result, the first streamed piece would bring the Send button back while the model was still writing.
 5. **Outside** the loop (back at the method's indentation), schedule the next check: call `.after` on `self.root` with two arguments, `POLL_INTERVAL_MS` and `self.poll_results` (no parentheses). This says "call this method again in 50 milliseconds". The method re-arms itself every time it runs. If you indent this line into the loop by mistake, the polling stops the first time the queue is empty, and nothing ever shows up.
 
-### 4.12 Method `append_chat`
+### 4.14 Method `append_chat`
 
-*Answer key: `[4.12]`.*
+*Answer key: `[4.14]`.*
 
 Parameters: `self` and `text`.
 
-**Docstring:** start with `[4.12]`. Say that it adds text to the end of the chat log exactly as given, why it has to unlock and relock the log (read-only blocks the program as well as the user), and that the caller decides on labels and line breaks, so the same method serves a whole message and a single streamed word.
+**Docstring:** start with `[4.14]`. Say that it adds text to the end of the chat log exactly as given, why it has to unlock and relock the log (read-only blocks the program as well as the user), and that the caller decides on labels and line breaks, so the same method serves a whole message and a single streamed word.
 
 1. Call `.config` on `self.chat_log` with `state` set to `"normal"`.
 2. Call `.insert` on `self.chat_log` with two arguments: the string `"end"` (where to insert) and `text`.
 3. Call `.config` again with `state` set to `"disabled"`.
 4. Call `.see` on `self.chat_log` with `"end"`, which scrolls to the bottom.
 
-### 4.13 Method `set_busy`
+### 4.15 Method `set_busy`
 
-*Answer key: `[4.13]`.*
+*Answer key: `[4.15]`.*
 
 Parameters: `self` and `busy` (a boolean).
 
-**Docstring:** start with `[4.13]`. Say that it greys out Load and Send while work is running or brings them back, and that it saves the flag so `send` can check it.
+**Docstring:** start with `[4.15]`. Say that it greys out Load and Send while work is running or brings them back, and that it saves the flag so `send` can check it.
 
 1. Store `busy` as `self.busy`.
 2. `if busy:` set a local variable `state` to the string `"disabled"`. `else:` set it to `"normal"`.
 3. Call `.config` on `self.load_button` with `state` set to `state`.
 4. Do the same for `self.send_button`.
 
-### 4.14 The function `main`
+### 4.16 The function `main`
 
-*Answer key: `[4.14]`.*
+*Answer key: `[4.16]`.*
 
 Back at zero indentation, outside the class. Define a function named `main` with no parameters.
 
-**Docstring:** start with `[4.14]`. Say that it creates the window, attaches the app, and runs until the window is closed, and what `mainloop` is: the loop that waits for clicks, keypresses and timers and calls your methods.
+**Docstring:** start with `[4.16]`. Say that it creates the window, attaches the app, and runs until the window is closed, and what `mainloop` is: the loop that waits for clicks, keypresses and timers and calls your methods.
 
 1. Create the main window by calling `tk.Tk()` and store it as `root`.
 2. Build the app by calling `ChatApp` with `root`. You do not need to store the result.
 3. Call `.mainloop()` on `root`. This line does not return until the window is closed.
 
-### 4.15 The last two lines
+### 4.17 The last two lines
 
-*Answer key: `[4.15]`.*
+*Answer key: `[4.17]`.*
 
-The standard ending for a runnable Python file. Put a comment above it starting with `[4.15]`.
+The standard ending for a runnable Python file. Put a comment above it starting with `[4.17]`.
 
 Write an `if` that compares the special variable `__name__` to the string `"__main__"` (two underscores on each side of both), and inside it call `main()`. Python sets `__name__` to `"__main__"` only in the file you ran directly, so this means "start the app if I was run, but not if I was imported".
 
@@ -529,59 +689,69 @@ From inside `my_build/`:
 python app.py
 ```
 
-Check each of these, once per backend, using the two models from step 1.6:
+Check each of these, once per backend, using the models from step 1.6:
 
-1. The window opens with two radio buttons, Browse, Load, a status line, an empty log, and an entry box with Send.
+1. The window opens with two radio buttons, Browse and Load; a Temperature slider, a Thinking mode box and a Thinking instructions button; a System prompt box; a status line; an empty log; and an entry box with Send.
 2. Clicking Load before Browse shows "Pick a model with Browse first."
 3. With llama.cpp selected, Browse opens a file picker filtered to `.gguf`. With PyTorch selected, it opens a folder picker.
-4. Load shows "Loading model..." and the Load and Send buttons grey out. The window still moves and resizes while it loads. Then the status changes to "Ready: ...".
-5. Typing a message and pressing Enter (or Send) shows your line and `Model:` straight away, with "Thinking..." in the status. The reply then types itself out after `Model:` a few characters at a time. Ask for something long, such as three sentences about the ocean, to see it clearly. Send stays greyed out until the reply is finished.
+4. Load shows "Loading model..." and the Load and Send buttons grey out. The window still moves and resizes while it loads. Then the status changes to "Ready: ... (262144 tokens of context)".
+5. Typing a message and pressing Enter (or Send) shows your line and `Model:` straight away, with "Writing a reply..." in the status. The reply then types itself out a few characters at a time. Send stays greyed out until it is finished.
 6. A second message gets an answer that shows the model remembers the first. Tell it your name in the first message and ask for it in the second.
-7. Loading a bad path shows "Error: ..." in the status line instead of crashing.
+7. Type "Always answer in French." in the System prompt box and ask a question. The answer should come in French (the smallest models do not always obey).
+8. Set the temperature to 0 and ask "Name one fruit. Reply with one word." twice, each time after loading the model again. The answer should be the same both times.
+9. Click Thinking instructions..., change the text, and click Save; the window closes. Tick Thinking mode and ask "What is 17 * 23?" with the 4.6 GB model. You should see its reasoning, then `[end of thinking]`, then the answer.
+10. Loading a bad path shows "Error: ..." in the status line instead of crashing.
 
 ## When it does not work
 
 | What you see | Likely cause | Look at |
 | --- | --- | --- |
 | `IndentationError`, `AttributeError: '...' object has no attribute '...'`, or `NameError: name 'self' is not defined` | A line is at the wrong depth. Methods are indented four spaces inside the class, their bodies eight. | the step you just typed |
-| `TypeError: ... takes 0 positional arguments but 1 was given` (or 1 but 2, and so on) | You left `self` out of the parameters of the method named in the message. If that method is `send`, `event=None` may be missing instead. | the step for the method named in the message (`[4.7]` for `send`) |
+| `TypeError: ... takes 0 positional arguments but 1 was given` (or 1 but 2, and so on) | You left `self` out of the parameters of the method named in the message. If that method is `send`, `event=None` may be missing instead. | the step for the method named in the message (`[4.9]` for `send`) |
+| `TypeError: ... missing 1 required positional argument` in the status line, or "takes 4 positional arguments but 5 were given" | A method is called with a different number of arguments than its definition has: usually `chat`, `stream` or `reply_worker`. Count them against the step. | `[3.2.1]`, `[4.9]`, `[4.12]` |
 | The Browse dialog pops up by itself as the app starts, or `AttributeError: 'ChatApp' object has no attribute 'status'` at startup | You put parentheses after a method you were handing over: `command=self.browse()` or `command=self.load_model()`. That calls it on the spot instead of handing it to the button. | `[4.4.1]` |
-| Send or Enter does nothing even with a model loaded | The same mistake in the bottom row: `command=self.send()`, or `self.send()` in the `bind` call. | `[4.4.3]` |
-| The window freezes while loading | You called the worker method directly instead of handing it to `start_worker`. | `[4.6]`, `[4.8]` |
-| The model loads but the status stays on "Loading model..." | `poll_results` is not re-arming: the `.after` line is missing or indented into the `while` loop. | `[4.11]` |
-| "Error: Unknown backend: ..." | A radio button's `value` does not match the strings in `load_backend`. | `[4.4.1]`, `[3.4]` |
+| Send or Enter does nothing even with a model loaded | The same mistake in the bottom row: `command=self.send()`, or `self.send()` in the `bind` call. | `[4.4.5]` |
+| Clicking Thinking instructions... shows no window, and the terminal shows `TclError: bad window path name` | The Save button's `command` calls `self.save_thinking_instructions(window, box)` directly instead of inside a `lambda`, so it runs while the window is being built and closes it before the button can be added. | `[4.6]` |
+| The window freezes while loading | You called the worker method directly instead of handing it to `start_worker`. | `[4.8]`, `[4.10]` |
+| The model loads but the status stays on "Loading model..." | `poll_results` is not re-arming: the `.after` line is missing or indented into the `while` loop. | `[4.13]` |
+| "Error: Unknown backend: ..." | A radio button's `value` does not match the strings in `load_backend`. | `[4.4.1]`, `[3.5]` |
+| The model seems to load, but the status stays on "Loading model..." and the terminal shows `AttributeError: '...Backend' object has no attribute 'context_size'` | `__init__` never stores `self.context_size`, so `poll_results` fails when it reads it and stops checking the queue. | `[3.3.1]`, `[3.4.1]`, `[4.13]` |
 | "Error: Failed to load model from file" | The file is not a chat model. In your models folder, the files whose names start with `mmproj-` are add-ons for image input, not models. | the file you picked |
-| Pressing Send does nothing | No model is loaded yet, or a reply is still being written. | `[4.7]` |
+| Pressing Send does nothing | No model is loaded yet, or a reply is still being written. | `[4.9]` |
 | "Error: Failed to load shared library ... llama.dll" | The three NVIDIA runtime files are missing. | step 1.4 |
-| Red `[ERROR] ... not documented` lines in the terminal with the PyTorch backend | Harmless noise from transformers. If the status line says "Ready", it worked. | step 3.5 |
-| The PyTorch reply repeats your whole prompt back | `skip_prompt` is missing from the streamer. | `[3.3.2]` |
-| The PyTorch reply appears all at once after a pause | `generate` is being called directly instead of on its own thread. | `[3.3.2]` |
-| "Error: string indices must be integers, not 'str'" with llama.cpp | `stream=True` is missing, so llama.cpp hands back one finished answer (a dictionary) and the `for` loop walks over its key names instead of chunks. | `[3.2.2]` |
-| Send comes back to life after the first word | `set_busy(False)` runs for every result instead of only in the three finishing branches. | `[4.11]` |
-| Words in the reply are doubled or run together | The slice in `reply_worker` is wrong, or `shown` is not being updated. | `[4.10]` |
-| `<generator object ...>` appears instead of a reply, at the Python prompt or in the log | The result of `chat` is being used as if it were a string: passed straight to `print` in step 3.5, or put straight into the queue in `reply_worker`. A generator has to be looped over. | step 3.5, `[4.10]` |
-| `ModuleNotFoundError: No module named 'backends'` | Running `app.py`: `backends.py` is not in the same folder as `app.py`, or was saved under another name (such as `backend.py`, or `backends.py.txt`, which Windows shows as `backends.py` when it hides file extensions). At the Python prompt in step 3.5: you started `python` from a folder other than `my_build/`. | step 1.7, step 3.5 |
+| Lines about `n_ctx_train`, `not documented`, `pad_token_id` or generation flags in the terminal | Harmless noise from llama.cpp and transformers. If the status line says "Ready", it worked. | step 3.6 |
+| The PyTorch reply repeats your whole prompt back | `skip_prompt` is missing from the streamer. | `[3.4.4]` |
+| The PyTorch reply appears all at once after a pause | `generate` is being called directly instead of on its own thread. | `[3.4.4]` |
+| "Error: string indices must be integers, not 'str'" with llama.cpp | `stream=True` is missing, so llama.cpp hands back one finished answer (a dictionary) and the `for` loop walks over its key names instead of chunks. | `[3.3.4]` |
+| Send comes back to life after the first word | `set_busy(False)` runs for every result instead of only in the three finishing branches. | `[4.13]` |
+| Words in the reply are doubled or run together | The slice in `reply_worker` is wrong, or `shown` is not being updated. | `[4.12]` |
+| `<generator object ...>` appears instead of a reply, at the Python prompt or in the log | The result of `chat` is being used as if it were a string: passed straight to `print` in step 3.6, or put straight into the queue in `reply_worker`. A generator has to be looped over. | step 3.6, `[4.12]` |
+| `ModuleNotFoundError: No module named 'backends'` | Running `app.py`: `backends.py` is not in the same folder as `app.py`, or was saved under another name (such as `backend.py`, or `backends.py.txt`, which Windows shows as `backends.py` when it hides file extensions). At the Python prompt in step 3.6: you started `python` from a folder other than `my_build/`. | step 1.7, step 3.6 |
 
 ## How this recipe was checked
 
 - **Install steps:** steps 1.1 to 1.5 were run, in order and with nothing else, in an empty Python environment on this machine. The check in 1.5 passed, and the app then ran both models in that environment. Skipping step 1.4 made `import llama_cpp` fail, so that step is required.
-- **Answer key:** the finished app was driven through its real window with both models from step 1.6: click Load, send with the Send button, send again with Enter, and confirm the model remembered the first message. Each reply was confirmed to arrive as dozens of separate writes to the chat log spread over the time the model was generating, with the window responsive throughout and Send greyed out until the end.
-- **This document:** copies of the app were written from this recipe alone, without sight of the answer key, and put through the same test with both models.
+- **Answer key:** the finished app was driven through its real window with the 0.8B GGUF, the 4.6 GB GGUF and the 2B PyTorch model. Each loaded with its full 262,144-token context. Replies streamed in dozens of pieces with the window responsive and Send greyed out until the end. The system prompt changed the answers, temperature 0 gave the same answer twice, the instructions window saved its text, and thinking mode showed reasoning, `[end of thinking]` and the answer (with the 4.6 GB model). With the context shrunk on purpose, the oldest messages were forgotten and the conversation always restarted on a user message. Asking for more context than the card holds made llama.cpp's load fail cleanly and the halving find a size that fits.
+- **This document:** copies of the app were written from this recipe alone, without sight of the answer key, and put through the same tests.
 - **Troubleshooting table:** each row that describes a coding mistake was checked by making that mistake in a copy of the answer key and running it. The symptom in the table is what actually happened.
-- **Explanations:** the claims this recipe makes about how Python, tkinter, llama-cpp-python and transformers behave were checked by independent reviewers against the installed libraries' source code and small test runs.
+- **Explanations:** the claims this recipe makes about how Python, tkinter, llama-cpp-python and transformers behave were checked against the installed libraries' source code and small test runs.
 
 The one thing not exercised is the Browse dialog itself; the tests set the model path directly.
 
 ## Known rough edges
 
-This is the most basic version on purpose, so a few things are left undone. The answer key behaves the same way.
+Level 1 leaves a few things undone on purpose. The answer key behaves the same way.
 
 - Sending a message before a model is loaded does nothing, with no message to say why.
 - Loading a second model starts a new conversation for the model, but the old messages stay on screen.
-- The first model stays in memory until the second has finished loading, so two large models may not fit on the graphics card together. Close and reopen the app to switch between large models.
+- The app asks for the biggest context the model supports, so llama.cpp can claim most of the graphics card's memory (about 8 GB for the test models). The first model also stays in memory until the second has finished loading. Close and reopen the app to switch models.
+- The PyTorch backend uses the model's full trained context as its limit, but it does not set memory aside up front, so a very long chat can run out of graphics memory before trimming ever starts.
+- When the conversation outgrows the context, the oldest messages are forgotten for good. They stay on screen, but the model no longer knows them. Level 2 summarises them instead.
+- In thinking mode, small models can keep thinking until they reach `MAX_NEW_TOKENS` without ever answering: the 0.8B and 2B test models did on a simple sum. Their thinking is then kept as the answer.
+- Thinking mode works by setting `enable_thinking` in the chat template and adding your instructions to the system prompt. A model whose template ignores `enable_thinking` only thinks if your instructions persuade it, and its reasoning will not be marked with `[end of thinking]`.
+- Closing the Thinking instructions window with its X button throws your edits away; only Save keeps them.
 - The status line's "Ready: ..." shows whatever path was last picked with Browse, so browsing again without clicking Load makes it name the wrong model.
 - If a reply fails with an error, your message stays in the conversation without an answer after it.
-- With llama.cpp, the whole conversation plus the reply has to fit in `CONTEXT_SIZE` (4096) tokens, and nothing old is dropped to make room. After a long chat a reply may stop early, and after that every message fails with "Error: Requested tokens (...) exceed context window of 4096". Click Load again to start a fresh conversation.
 - If a reply fails partway through, the words that had already arrived stay on screen and the next message starts on the same line.
 - If the PyTorch model fails in the middle of generating, the app waits for more words indefinitely and has to be closed.
 - Picking a `.gguf` file and then switching the radio button to PyTorch before Load gives an error, because the path and the backend no longer match.
@@ -590,4 +760,4 @@ Each of these is a small fix and a good first change to make on your own.
 
 ## Where to go next
 
-Once your copy works, these are good second exercises, in rough order of difficulty: add a "New chat" button, add a Stop button that cuts a reply short, add a system prompt box, remember the last model path between runs.
+Once your copy works, good small exercises are: a "New chat" button, a Stop button that cuts a reply short, and remembering the last model path between runs. The bigger next step is [RECIPE_LEVEL2.md](RECIPE_LEVEL2.md): compaction, tool calling and MCP.
