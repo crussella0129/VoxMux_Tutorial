@@ -1,6 +1,7 @@
 """tools/make_app.py: the script that builds the app repository."""
 
 import ast
+import contextlib
 import importlib.util
 import io
 import pathlib
@@ -218,6 +219,92 @@ class CommandLine(unittest.TestCase):
             done = self.run_script("--check", folder)
             self.assertEqual(done.returncode, 1)
             self.assertIn("no SOURCE file", done.stdout)
+
+
+@unittest.skipUnless(shutil.which("git"), "git is not installed here")
+class InAGitRepository(unittest.TestCase):
+    """Checking and writing when the app folder is a git repository."""
+
+    def setUp(self):
+        head = make_app.git(support.ROOT, "rev-parse", "HEAD")
+        if not head:
+            self.skipTest("the tutorial is not a git checkout here")
+        self.folder = pathlib.Path(tempfile.mkdtemp(prefix="voxmux-test-"))
+        self.addCleanup(shutil.rmtree, self.folder, ignore_errors=True)
+        for name, data in make_app.build(head.strip()).items():
+            path = self.folder / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.assertIsNotNone(make_app.git(self.folder, "init", "--quiet"))
+        self.stage()
+
+    def stage(self):
+        self.assertIsNotNone(make_app.git(self.folder, "add", "--all"))
+
+    def check(self):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            code = make_app.check(self.folder)
+        return code, printed.getvalue()
+
+    def test_a_fresh_copy_matches(self):
+        code, printed = self.check()
+        self.assertEqual(code, 0, printed)
+        self.assertIn("matches crussella0129/VoxMux_Tutorial@", printed)
+
+    def test_windows_line_endings_still_match(self):
+        path = self.folder / "app.py"
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+        self.assertEqual(self.check()[0], 0)
+
+    def test_an_edited_file_is_caught(self):
+        with open(self.folder / "app.py", "a", encoding="utf-8") as file:
+            file.write("print('edited by hand')\n")
+        code, printed = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("differs  app.py", printed)
+
+    def test_a_missing_file_is_caught(self):
+        (self.folder / "tools.py").unlink()
+        code, printed = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("missing  tools.py", printed)
+
+    def test_an_extra_tracked_file_is_caught(self):
+        (self.folder / "requirements.txt").write_text("torch\n")
+        self.assertEqual(self.check()[0], 0, "an untracked file is not git's business")
+        self.stage()
+        code, printed = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("extra    requirements.txt", printed)
+
+    def test_writing_removes_a_stale_tracked_file(self):
+        (self.folder / "requirements.txt").write_text("torch\n")
+        (self.folder / "settings.json").write_text("{}")
+        self.stage()
+        make_app.git(self.folder, "rm", "--cached", "--quiet", "settings.json")
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            code = make_app.write(self.folder, draft=True)
+        self.assertEqual(code, 0, printed.getvalue())
+        self.assertIn("removed  requirements.txt", printed.getvalue())
+        self.assertFalse((self.folder / "requirements.txt").exists())
+        self.assertTrue(
+            (self.folder / "settings.json").exists(), "untracked files stay"
+        )
+        # The removal is not committed yet, and that must not count as extra.
+        (self.folder / "SOURCE").write_bytes(
+            make_app.build(make_app.git(support.ROOT, "rev-parse", "HEAD").strip())[
+                "SOURCE"
+            ]
+        )
+        (self.folder / "README.md").write_bytes(
+            make_app.build(make_app.git(support.ROOT, "rev-parse", "HEAD").strip())[
+                "README.md"
+            ]
+        )
+        code, printed = self.check()
+        self.assertEqual(code, 0, printed)
 
 
 if __name__ == "__main__":

@@ -250,7 +250,10 @@ def check(folder):
         elif path.read_bytes().replace(b"\r\n", b"\n") != data:
             problems.append(f"differs  {name}")
     for name in sorted((present or set()) - set(files)):
-        problems.append(f"extra    {name}")
+        # A file that was just removed is still in git's list until the
+        # removal is committed. Only a file that is really there counts.
+        if (folder / name).exists():
+            problems.append(f"extra    {name}")
     if problems:
         print("\n".join(problems))
         print(f"{folder} does not match {TUTORIAL}@{commit}")
