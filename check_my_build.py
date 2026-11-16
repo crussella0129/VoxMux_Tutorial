@@ -40,6 +40,20 @@ def guess_level(folder):
     return 1
 
 
+def syntax_errors(folder):
+    """Return one message for each .py file in folder that Python cannot read."""
+    messages = []
+    for path in sorted(folder.glob("*.py")):
+        try:
+            compile(path.read_text(encoding="utf-8"), str(path), "exec")
+        except SyntaxError as error:
+            messages.append(
+                f"{path.name}, line {error.lineno}: {error.msg}\n"
+                f"    {(error.text or '').strip()[:100]}"
+            )
+    return messages
+
+
 def main():
     """Run one level's tests on the folder named on the command line."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -53,6 +67,13 @@ def main():
         return 2
     level = options.level or guess_level(folder)
     print(f"Checking {folder} against level {level}\n")
+
+    problems = syntax_errors(folder)
+    if problems:
+        print("Python cannot read these files yet. Fix them first:\n")
+        print("\n".join(problems))
+        print('\nRECIPE.md\'s "When it does not work" table covers the common causes.')
+        return 1
 
     # The tests read this to know which folder to load instead of an answer key.
     os.environ["VOXMUX_BUILD"] = str(folder)

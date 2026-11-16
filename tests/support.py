@@ -46,10 +46,15 @@ def load_build(folder):
         sys.modules.pop(name, None)
     sys.path.insert(0, str(folder))
     try:
-        modules = {"folder": folder}
+        modules = {"folder": folder, "broken": {}}
         for name in NAMES:
             if (folder / f"{name}.py").exists():
-                modules[name] = importlib.import_module(name)
+                try:
+                    modules[name] = importlib.import_module(name)
+                except Exception as error:
+                    # A file that will not even load is reported by the tests
+                    # that need it, instead of stopping every test here.
+                    modules["broken"][name] = error
     finally:
         sys.path.remove(str(folder))
         for name in NAMES:
@@ -58,7 +63,15 @@ def load_build(folder):
 
 
 def need(build, name):
-    """Skip the calling test class if the build has no such file yet."""
+    """Skip the calling test class if the build has no such file yet.
+
+    A file that is there but could not be loaded is an error, not a skip.
+    """
+    if name in build.broken:
+        error = build.broken[name]
+        raise RuntimeError(
+            f"{name}.py could not be loaded: {type(error).__name__}: {error}"
+        )
     if not hasattr(build, name):
         raise unittest.SkipTest(f"{name}.py is not in {build.folder} yet")
 
