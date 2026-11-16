@@ -1,0 +1,74 @@
+name: Matches the tutorial
+
+# This repository is generated from VoxMux_Tutorial. SOURCE names the
+# tutorial commit it was made from. The first job rebuilds the files from
+# that commit and fails if anything here differs. The second runs the
+# tutorial's tests on these files.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generated:
+    name: Files match the commit in SOURCE
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - name: Read the SOURCE stamp
+        id: source
+        run: |
+          commit=$(sed -n 's/^crussella0129\/VoxMux_Tutorial@\([0-9a-f]\{40\}\)$/\1/p' app/SOURCE)
+          if [ -z "$commit" ]; then
+            echo "SOURCE does not name a tutorial commit:"
+            cat app/SOURCE
+            exit 1
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: crussella0129/VoxMux_Tutorial
+          ref: ${{ steps.source.outputs.commit }}
+          path: tutorial
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Rebuild and compare
+        run: python tutorial/tools/make_app.py --check app
+
+  tests:
+    name: The tutorial's tests pass on these files
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - name: Read the SOURCE stamp
+        id: source
+        shell: bash
+        run: |
+          commit=$(sed -n 's/^crussella0129\/VoxMux_Tutorial@\([0-9a-f]\{40\}\)$/\1/p' app/SOURCE)
+          if [ -z "$commit" ]; then
+            echo "SOURCE does not name a tutorial commit:"
+            cat app/SOURCE
+            exit 1
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: crussella0129/VoxMux_Tutorial
+          ref: ${{ steps.source.outputs.commit }}
+          path: tutorial
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the one package the tests need
+        run: python -m pip install tzdata
+      - name: Run the tests
+        run: python tutorial/check_my_build.py app
