@@ -4,7 +4,7 @@ This is a description, in words, of every file in [`answer_key/`](answer_key/). 
 
 There is no finished code in this document. The finished code is in `answer_key/`, and the two are tied together by **reference tags**.
 
-When this works, [RECIPE_LEVEL2.md](RECIPE_LEVEL2.md) is level 2: summarising old messages instead of forgetting them, tool calling, and MCP servers.
+When this works, [RECIPE_LEVEL2.md](RECIPE_LEVEL2.md) is level 2: summarising old messages instead of forgetting them, tool calling, and MCP servers. [RECIPE_LEVEL3.md](RECIPE_LEVEL3.md) is level 3: a Stop button, a New chat button, saved settings, and asking before a tool runs.
 
 ## How the reference tags work
 
@@ -19,14 +19,25 @@ Each tagged docstring in the answer key also carries a short "How it works" desc
 
 ## What you are building
 
-Four files, in a new folder called `my_build/` at the top of the repo:
+Three files, in a new folder called `my_build/` at the top of the repo:
 
 | Step | File | What it is |
 | --- | --- | --- |
 | 1 | `install.py` | A short script that installs the libraries and checks they work. Not part of the app itself. |
-| 2 | `requirements.txt` | The list of libraries the app uses. |
 | 3 | `backends.py` | A shared base class, two classes that each know how to run one kind of model, and one function that picks between them. No UI code. |
 | 4 | `app.py` | The window: one class for the UI, one `main` function, and the line that starts it. |
+
+Step 2 writes no file: it downloads the models you will test with. Step 5 runs the finished app.
+
+The libraries the app depends on are listed in one place only, `install.py`. There is no `requirements.txt`, because `pip install -r requirements.txt` would do the wrong thing on Windows: it fetches the CPU-only PyTorch and tries to compile llama-cpp-python from source.
+
+**You can check your work at any point** without a model or a graphics card. From the repo root:
+
+```bash
+python check_my_build.py my_build
+```
+
+This runs the same tests the answer key is checked with on your folder. A file you have not written yet is skipped. Each line it prints ends with the step numbers it checks, so a failure tells you which step to read again.
 
 The idea that holds it together: both backend classes have **the same methods with the same parameters**. You build one by giving it a model path, and you loop over `chat` with the conversation so far to receive the reply a few characters at a time. Because the two look identical from the outside, the window never has to care which one it is holding.
 
@@ -144,7 +155,7 @@ Use the same `python` command you will use later to run `app.py`, because that i
 
 It ends with a few `ggml_cuda_init` lines naming your graphics card, then three version numbers followed by `cuda: True llama gpu: True`. If it stops early with `CalledProcessError`, scroll up: pip's own message just above says what went wrong.
 
-### 1.4 Models to test with
+## Step 2: models to test with
 
 Download one model of each kind from Hugging Face. `install.py` has already installed the `hf` download command, which comes with transformers. None of these models needs an account. Keep models outside the repo; these commands put them in `C:\models`, and any folder works.
 
@@ -175,18 +186,6 @@ hf download unsloth/Qwen3.5-4B-GGUF Qwen3.5-4B-Q8_0.gguf --local-dir C:\models
 The two small models are fine for chatting but tend to think for ever without answering. Use the 4B model whenever a step asks for it.
 
 These models fit an 11 GB graphics card. The first two are the exact files this recipe was tested with. The 4B tests used a different Q8 build of Qwen3.5 4B, so the file above should behave the same way but has not itself been run.
-
-## Step 2: `requirements.txt`
-
-Make a file named `requirements.txt`. It is plain text with exactly three lines, one per library, and nothing else:
-
-- `llama-cpp-python==0.3.36`
-- `torch`
-- `transformers>=5`
-
-The `==0.3.36` on the first line and the `>=5` on the last are the same version rules as in `install.py`: exactly 0.3.36, and 5 or newer. This file is the app's record of what it depends on. It has no tags because it has no code.
-
-Do not install from it on Windows. `pip install -r requirements.txt` would fetch the CPU-only PyTorch and try to compile llama-cpp-python from source. `install.py` from step 1 is how these libraries get installed.
 
 ## Step 3: `backends.py`
 
@@ -412,7 +411,7 @@ Back at zero indentation (outside all three classes), define a function named `l
 From inside `my_build/`, start the Python prompt by running `python` with no arguments. Then, one line at a time:
 
 1. From `backends`, import `load_backend`.
-2. Call it with two arguments, the kind string and the full path to a model from step 1.4, and store the result in a variable. The kind is `"llama_cpp"` for the `.gguf` file and `"pytorch"` for the folder. Put an `r` before the opening quote of a Windows path so the backslashes are taken literally.
+2. Call it with two arguments, the kind string and the full path to a model from step 2, and store the result in a variable. The kind is `"llama_cpp"` for the `.gguf` file and `"pytorch"` for the folder. Put an `r` before the opening quote of a Windows path so the backslashes are taken literally.
 3. Print the variable's `context_size` attribute. For the test models it should be `262144`.
 4. Make a list containing one dictionary, with `"role"` set to `"user"` and `"content"` set to a question, and store it in a variable.
 5. Write a `for` loop over a call to `.chat` on your backend variable. Pass four arguments: your list, an empty string for the system prompt, `0.7` for the temperature, and `False` for thinking. Inside the loop, call `print` with the loop variable and two keyword arguments: `end` set to an empty string (so each piece continues on the same line) and `flush` set to `True` (so it shows at once). At the Python prompt, press Enter on an empty line to run the loop.
@@ -430,6 +429,14 @@ Before you start, understand the one hard idea in this file. Loading a model and
 Streaming rides on the same queue. Instead of one result per reply, the worker puts in one small result per piece of text, and a last one to say the reply is finished.
 
 The same rule decides where settings are read. The system prompt, the temperature and the thinking switch all live in widgets, so `send` reads them on the main thread and hands the worker plain values.
+
+### Run it as you go
+
+Step 4 is about 300 lines. Do not type all of them before the first run: a mistake is far easier to find in the twenty lines you just typed than in three hundred. Three checkpoints below, after steps 4.4, 4.8 and 4.11, say when to run `python app.py` and what you should see. They rely on two tricks.
+
+**Type the ending early.** At the first checkpoint you skip ahead and type steps 4.16 and 4.17, `main` and the last two lines, at the bottom of the file. They stay at the bottom. Every method you type afterwards goes above them, inside the class.
+
+**Stand-ins.** `build_widgets` hands `self.browse`, `self.load_model` and other methods to buttons, and Python looks each one up at that moment. A method that does not exist yet stops the window from opening. So until you reach a method's own step, give it a stand-in: its `def` line with the right parameters, and a body of one word, `pass`, which does nothing. When you reach the method's step, replace the stand-in with the real thing. Each checkpoint says which stand-ins it needs.
 
 ### 4.1 Top of the file
 
@@ -538,6 +545,18 @@ This is built before the chat log on purpose: tkinter gives space to widgets in 
 1. Create a `scrolledtext.ScrolledText` with parent `self.root`, `wrap` set to `"word"` (break lines between words), and `state` set to `"disabled"` (read-only, so the user cannot type into the history). Store it as `self.chat_log`.
 2. Pack it with `fill` set to `"both"`, `expand` set to `True`, and `padx` and `pady` both `8`. It takes whatever space is left.
 
+### Checkpoint 1: the window opens
+
+1. Skip ahead and type steps 4.16 and 4.17 now, at the bottom of the file.
+2. Inside the class, below `build_widgets`, add five stand-ins:
+   - `browse`, `open_thinking_window`, `load_model` and `poll_results`, each with the one parameter `self`.
+   - `send`, with the parameters `self` and `event=None`. Step 4.9 explains the default.
+3. Run `python app.py` from inside `my_build/`.
+
+The window should open with two radio buttons, Browse and Load; a Temperature slider, a Thinking mode box and a Thinking instructions button; a System prompt box; the status line "No model loaded."; an empty log; and an entry box with Send. Drag the window smaller: the entry box and Send stay visible at the bottom. The buttons do nothing yet.
+
+If no window opens, the last line of the error in the terminal names the problem, and the lines above it name the line of your file. Close the window before you go on.
+
 ### 4.5 Method `browse`
 
 *Answer key: `[4.5]`.*
@@ -593,6 +612,16 @@ Parameters: just `self`. Runs when the Load button is clicked.
 3. Set the status text to `"Loading model..."`.
 4. Call `self.start_worker` with three positional arguments: `self.load_worker` (the method itself, no parentheses), the result of `self.backend_kind.get()`, and `self.model_path`.
 
+### Checkpoint 2: Browse, the instructions window, and the Load guard
+
+`browse`, `open_thinking_window` and `load_model` are real now. `send` and `poll_results` are still stand-ins. Run the app and check, in this order:
+
+1. Click Load before anything else. The status line says "Pick a model with Browse first."
+2. Click Thinking instructions..., change the text, and click Save. The small window closes. Open it again: your text is there.
+3. Click Browse with llama.cpp selected. A file picker opens, filtered to `.gguf`. Pick a model: the status line says `Selected:` and its path. Select PyTorch and click Browse again: this time it is a folder picker.
+
+Do not click Load now that a model is picked. `set_busy` and `start_worker` do not exist yet, so nothing would happen in the window and the terminal would show an `AttributeError`.
+
 ### 4.9 Method `send`
 
 *Answer key: `[4.9]`.*
@@ -645,6 +674,18 @@ Parameters: `self`, `kind`, and `model_path`. **This method runs on the worker t
    - Put a tuple of the string `"error"` and `str(error)` into `self.results`. `str(...)` converts the exception into its message text.
 
 Catching `Exception` broadly is usually bad style, but here it is right. Without it, an error on the worker thread would only print a traceback in the terminal. The window would never hear about it, so the status would stay on "Loading model..." and Load and Send would stay greyed out for good. Catching it lets the error show in the status line instead.
+
+### Checkpoint 3: loading a model
+
+Loading needs two methods from further down before it works from end to end: `poll_results` (step 4.13), which carries the result back to the window, and `set_busy` (step 4.15). Skip ahead and type those two now, replacing the `poll_results` stand-in. The answer key keeps the methods in step order, so put them where they will end up: `reply_worker` (4.12) will go above `poll_results`, and `append_chat` (4.14) between `poll_results` and `set_busy`.
+
+No stand-ins are left after this. Run the app and check:
+
+1. Browse to a model and click Load. The status line says "Loading model..." and Load and Send grey out. The window still moves and resizes while it loads.
+2. The status changes to "Ready:", the model's path, and "(262144 tokens of context)". Load and Send come back.
+3. Select PyTorch, Browse to a folder with no model in it, and click Load. The status line shows "Error:" and a message, and the buttons come back.
+
+Do not send a message yet. `send` is real, but the two methods it leads to, `reply_worker` and `append_chat`, are the last two you have to type: steps 4.12 and 4.14. When they are in, check 4.13 and 4.15 against what you typed at this checkpoint, then go to step 5.
 
 ### 4.12 Method `reply_worker`
 
@@ -732,17 +773,27 @@ Back at zero indentation, outside the class. Define a function named `main` with
 
 The standard ending for a runnable Python file. Put a comment above it starting with `[4.17]`.
 
+(If you followed the checkpoints, 4.16 and 4.17 are already at the bottom of your file.)
+
 Write an `if` that compares the special variable `__name__` to the string `"__main__"` (two underscores on each side of both), and inside it call `main()`. Python sets `__name__` to `"__main__"` only in the file you ran directly, so this means "start the app if I was run, but not if I was imported".
 
 ## Step 5: run it
 
-From inside `my_build/`:
+First, without a model. From the repo root:
+
+```bash
+python check_my_build.py my_build
+```
+
+This opens your window with a scripted stand-in for the model and clicks through it in a few seconds. Fix anything that fails before you go on: each line ends with the steps it checks.
+
+Then, from inside `my_build/`, with a real model:
 
 ```bash
 python app.py
 ```
 
-Check each of these, once per backend, using the models from step 1.4:
+Check each of these, once per backend, using the models from step 2:
 
 1. The window opens with two radio buttons, Browse and Load; a Temperature slider, a Thinking mode box and a Thinking instructions button; a System prompt box; a status line; an empty log; and an entry box with Send.
 2. Clicking Load before Browse shows "Pick a model with Browse first."
@@ -792,6 +843,8 @@ Check each of these, once per backend, using the models from step 1.4:
 - **This document:** copies of the app were written from this recipe alone, without sight of the answer key, and put through the same tests.
 - **Troubleshooting table:** each row that describes a coding mistake was checked by making that mistake in a copy of the answer key and running it. The symptom in the table is what actually happened.
 - **Explanations:** the claims this recipe makes about how Python, tkinter, llama-cpp-python and transformers behave were checked against the installed libraries' source code and small test runs.
+- **Automatic tests:** [`tests/test_level1.py`](tests/test_level1.py) checks `install.py` without installing anything, the trimming in `backends.py` with a stand-in model, and the window from Load to a finished reply. The tests need no graphics card and run on GitHub on every change. `check_my_build.py` runs them on your copy.
+- **Checkpoints:** the three checkpoints in step 4 were tried by cutting the answer key down to exactly the methods and stand-ins each one describes and running it.
 
 The one thing not exercised is the Browse dialog itself; the tests set the model path directly.
 
@@ -813,8 +866,8 @@ Level 1 leaves a few things undone on purpose. The answer key behaves the same w
 - If the PyTorch model fails in the middle of generating, the app waits for more words indefinitely and has to be closed.
 - Picking a `.gguf` file and then switching the radio button to PyTorch before Load gives an error, because the path and the backend no longer match.
 
-Each of these is a small fix and a good first change to make on your own.
+Each of these is a small fix and a good first change to make on your own. Level 2 deals with the forgotten messages. Level 3 deals with the old messages left on screen after a second Load, and with the PyTorch failure that never ends.
 
 ## Where to go next
 
-Once your copy works, good small exercises are: a "New chat" button, a Stop button that cuts a reply short, and remembering the last model path between runs. The bigger next step is [RECIPE_LEVEL2.md](RECIPE_LEVEL2.md): compaction, tool calling and MCP.
+[RECIPE_LEVEL2.md](RECIPE_LEVEL2.md) is level 2: compaction, tool calling and MCP. [RECIPE_LEVEL3.md](RECIPE_LEVEL3.md) is level 3: a Stop button that cuts a reply short, a New chat button, settings that are remembered between runs, and asking before an MCP tool runs. If you would like to try adding those buttons on your own first, do it before you read level 3.

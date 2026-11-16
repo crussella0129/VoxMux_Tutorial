@@ -73,7 +73,7 @@ Every conversation opens the same way. The client sends the request `initialize`
    ```
 
    The first three libraries print "Requirement already satisfied", `tzdata` installs, and the check passes as before. Everything else in level 2 uses only Python's own modules.
-4. Use the 4B model from step 1.4, `Qwen3.5-4B-Q8_0.gguf`, for most of your testing. The 0.8B and 2B models can call tools too, but they also call them when they should not.
+4. Use the 4B model from step 2, `Qwen3.5-4B-Q8_0.gguf`, for most of your testing. The 0.8B and 2B models can call tools too, but they also call them when they should not.
 
 ## Step 7: `backends.py`, changed
 
@@ -660,7 +660,15 @@ Parameters: just `self`. Put it after `set_busy`. One-line docstring starting wi
 
 ## Step 13: run it
 
-From inside `my_build_level2`:
+First, without a model. From the repo root:
+
+```bash
+python check_my_build.py my_build_level2
+```
+
+This runs the level 2 tests on your folder: the calculator, the tool-call reader, compaction with a stand-in model, your MCP client against your demo server, and the tool loop in your real window. A file you have not written yet is skipped, so you can also run it after each step. Each line ends with the steps it checks.
+
+Then, from inside `my_build_level2`, with a real model:
 
 ```bash
 python app.py
@@ -712,6 +720,7 @@ An MCP server runs with your permissions and can do anything you can, so only ad
 - **Making room** was tested on 2,000 random conversations mixing user, model and tool messages, with random context sizes. None crashed, the newest user message and everything after it were always kept, and the conversation always started with a user message.
 - **Troubleshooting table:** each row that describes a coding mistake was checked by making that mistake in a copy of the answer key and running it.
 - **Independent review:** reviewers who had not written the code checked this recipe against the answer key line by line, and copies of level 2 were written from this recipe alone.
+- **Automatic tests:** [`tests/test_level2.py`](tests/test_level2.py) repeats the checks above that need no real model, and runs on GitHub on every change.
 - **Not tested here:** third-party MCP servers. The machine this was written on was not allowed to download and run them, so the "Adding other MCP servers" section is untested. The client follows the published protocol.
 
 ## Known rough edges
@@ -725,4 +734,11 @@ An MCP server runs with your permissions and can do anything you can, so only ad
 - If the window is closed while the first Load is still starting the servers, they are not stopped by the app; they stop on their own when their input closes as the app exits.
 - Compaction runs only when the context is completely full. With the maximum context, that may take a very long conversation, and summarising that much at once takes a while.
 
+- MCP tools run without asking you first. Level 3 adds the question.
+- A reply cannot be stopped once it has started. Level 3 adds a Stop button.
+
 Everything in level 1's "Known rough edges" still applies, except that old messages are now summarised rather than simply forgotten.
+
+## Where to go next
+
+[RECIPE_LEVEL3.md](RECIPE_LEVEL3.md) is level 3: a Stop button, a New chat button, saved settings, and asking before an MCP tool runs.

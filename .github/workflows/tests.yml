@@ -1,0 +1,29 @@
+name: Tests
+
+# None of this needs a graphics card or a model. The tests drive the real
+# tkinter window with a scripted stand-in for the model.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the formatter and the one package the tests need
+        run: python -m pip install ruff==0.15.7 tzdata
+      - name: Formatting
+        run: python -m ruff format --check .
+      - name: Lint
+        run: python -m ruff check .
+      - name: Tests
+        run: python -m unittest discover -s tests -v

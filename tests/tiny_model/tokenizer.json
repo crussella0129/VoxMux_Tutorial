@@ -1,0 +1,72 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "<unk>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "<eos>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    }
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Whitespace"
+  },
+  "post_processor": {
+    "type": "TemplateProcessing",
+    "single": [
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      }
+    ],
+    "pair": [
+      {
+        "Sequence": {
+          "id": "A",
+          "type_id": 0
+        }
+      },
+      {
+        "Sequence": {
+          "id": "B",
+          "type_id": 1
+        }
+      }
+    ],
+    "special_tokens": {}
+  },
+  "decoder": null,
+  "model": {
+    "type": "WordLevel",
+    "vocab": {
+      "<unk>": 0,
+      "<eos>": 1,
+      "user": 2,
+      "assistant": 3,
+      ":": 4,
+      "Say": 5,
+      "hello": 6,
+      "in": 7,
+      "five": 8,
+      "words.": 9
+    },
+    "unk_token": "<unk>"
+  }
+}

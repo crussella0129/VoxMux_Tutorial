@@ -1,4 +1,0 @@
-llama-cpp-python==0.3.36
-torch
-transformers>=5
-tzdata
