@@ -66,7 +66,7 @@ class CheckMyBuild(unittest.TestCase):
         self.assertIn("(1.2.2)", done.stderr)
 
     def test_the_level_is_worked_out_from_the_files(self):
-        for level in (2, 3):
+        for level in (2, 3, 4):
             folder = support.ROOT / support.ANSWER_KEYS[level]
             done = self.run_script(str(folder), "--help")
             self.assertEqual(done.returncode, 0)

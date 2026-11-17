@@ -18,10 +18,14 @@ import time
 import tkinter as tk
 import types
 import unittest
-import warnings
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ANSWER_KEYS = {1: "answer_key", 2: "answer_key_level2", 3: "answer_key_level3"}
+ANSWER_KEYS = {
+    1: "answer_key",
+    2: "answer_key_level2",
+    3: "answer_key_level3",
+    4: "answer_key_level4",
+}
 NAMES = ["install", "backends", "tools", "mcp_client", "demo_mcp_server", "app"]
 
 
@@ -82,6 +86,10 @@ def make_backend(build, context_size=100_000):
     One word counts as one token. Each reply comes from .replies, a list the
     test fills in: a string is handed out a word at a time, anything else is
     looped over as it is, and when the list is empty the reply is "ok".
+
+    Two switches imitate the chat templates of other model families. With
+    .knows_tools off the prompt is the same with tools as without, and with
+    .refuses_system on a message with the role "system" is an error.
     """
 
     class FakeBackend(build.backends.Backend):
@@ -91,13 +99,21 @@ def make_backend(build, context_size=100_000):
             self.prompts = []
             self.tools_seen = []
             self.closed_early = False
+            self.knows_tools = True
+            self.refuses_system = False
 
         def build_prompt(self, messages, thinking, tools=None):
             self.tools_seen.append(tools)
+            if self.refuses_system and messages and messages[0]["role"] == "system":
+                raise ValueError("Conversation roles must alternate")
             lines = [f"{m['role']}: {m.get('content') or ''}" for m in messages]
             if thinking:
                 lines.append("(thinking on)")
-            return "\n".join(lines)
+            prompt = "\n".join(lines)
+            if tools and self.knows_tools:
+                # Joined to the last word, so the count of tokens is unchanged.
+                prompt = prompt + "<tools>"
+            return prompt
 
         def count_tokens(self, prompt):
             return len(prompt.split())
@@ -137,19 +153,13 @@ def call_text(name, **arguments):
 
 
 class Case(unittest.TestCase):
-    """Base class for every test here. Subclasses set .build.
-
-    The MCP client leaves a server's pipes for Python to close when the
-    server object is thrown away. That is harmless, but Python's test runner
-    prints a ResourceWarning for each one, so those are switched off.
-    """
+    """Base class for every test here. Subclasses set .build."""
 
     build = None
     needs = []
 
     @classmethod
     def setUpClass(cls):
-        warnings.simplefilter("ignore", ResourceWarning)
         for name in cls.needs:
             need(cls.build, name)
 
@@ -174,6 +184,8 @@ class AppCase(Case):
             self.patch("MCP_CONFIG", self.tmp / "mcp_servers.json")
         if hasattr(self.module, "SETTINGS_FILE"):
             self.patch("SETTINGS_FILE", self.tmp / "settings.json")
+        if hasattr(self.module, "CHATS_FOLDER"):
+            self.patch("CHATS_FOLDER", self.tmp / "chats")
         self.root = None
         self.app = None
 

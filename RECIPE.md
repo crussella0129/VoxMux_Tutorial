@@ -185,7 +185,7 @@ hf download unsloth/Qwen3.5-4B-GGUF Qwen3.5-4B-Q8_0.gguf --local-dir C:\models
 
 The two small models are fine for chatting but tend to think for ever without answering. Use the 4B model whenever a step asks for it.
 
-These models fit an 11 GB graphics card. The first two are the exact files this recipe was tested with. The 4B tests used a different Q8 build of Qwen3.5 4B, so the file above should behave the same way but has not itself been run.
+These models fit an 11 GB graphics card. The first two are the exact files this recipe was tested with. The 4B tests for levels 1 to 3 used a different Q8 build of Qwen3.5 4B. The file above was run with level 4, and passed every check there.
 
 ## Step 3: `backends.py`
 
@@ -854,7 +854,7 @@ Level 1 leaves a few things undone on purpose. The answer key behaves the same w
 
 - Sending a message before a model is loaded does nothing, with no message to say why.
 - Loading a second model starts a new conversation for the model, but the old messages stay on screen.
-- The app asks for the biggest context the model supports, so llama.cpp can claim most of the graphics card's memory (about 8 GB for the test models). The first model also stays in memory until the second has finished loading. Close and reopen the app to switch models.
+- The app asks for the biggest context the model supports, so llama.cpp can claim most of the graphics card's memory (about 8 GB for the test models). The first model also stays in memory until the second has finished loading. Close and reopen the app to switch models. Level 4 sets a limit on the context and lets the first model go before it loads the second.
 - The PyTorch backend uses the model's full trained context as its limit, but it does not set memory aside up front, so a very long chat can run out of graphics memory before trimming ever starts.
 - When the conversation outgrows the context, the oldest messages are forgotten for good. They stay on screen, but the model no longer knows them. Level 2 summarises them instead.
 - In thinking mode, small models can keep thinking until they reach `MAX_NEW_TOKENS` without ever answering: the 0.8B and 2B test models did on a simple sum. Their thinking is then kept as the answer.
@@ -866,7 +866,7 @@ Level 1 leaves a few things undone on purpose. The answer key behaves the same w
 - If the PyTorch model fails in the middle of generating, the app waits for more words indefinitely and has to be closed.
 - Picking a `.gguf` file and then switching the radio button to PyTorch before Load gives an error, because the path and the backend no longer match.
 
-Each of these is a small fix and a good first change to make on your own. Level 2 deals with the forgotten messages. Level 3 deals with the old messages left on screen after a second Load, and with the PyTorch failure that never ends.
+Each of these is a small fix and a good first change to make on your own. Level 2 deals with the forgotten messages. Level 3 deals with the old messages left on screen after a second Load, and with the PyTorch failure that never ends. Level 4 lets the first model go before the second loads, and takes a message that got no answer back out of the conversation.
 
 ## Where to go next
 

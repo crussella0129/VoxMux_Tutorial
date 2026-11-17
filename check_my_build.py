@@ -2,7 +2,7 @@
 
     python check_my_build.py my_build
     python check_my_build.py my_build_level2
-    python check_my_build.py my_build_level3 --level 3
+    python check_my_build.py my_build_level4 --level 4
 
 It runs the same tests the answer keys are checked with, on the folder you
 name. No model and no graphics card are needed: a scripted stand-in plays
@@ -30,8 +30,12 @@ TESTS = ROOT / "tests"
 def guess_level(folder):
     """Work out which level a folder holds from what is in it."""
     app = folder / "app.py"
-    if app.exists() and "def new_chat" in app.read_text(encoding="utf-8"):
-        return 3
+    if app.exists():
+        text = app.read_text(encoding="utf-8")
+        if "def save_chat" in text:
+            return 4
+        if "def new_chat" in text:
+            return 3
     backends = folder / "backends.py"
     if (folder / "tools.py").exists():
         return 2
@@ -58,7 +62,7 @@ def main():
     """Run one level's tests on the folder named on the command line."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("folder", type=pathlib.Path, help="the folder with your files")
-    parser.add_argument("--level", type=int, choices=[1, 2, 3])
+    parser.add_argument("--level", type=int, choices=[1, 2, 3, 4])
     options = parser.parse_args()
 
     folder = options.folder.resolve()

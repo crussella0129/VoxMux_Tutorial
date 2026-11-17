@@ -355,10 +355,13 @@ class Mcp(support.Case):
         self.assertEqual(server.request("ping", {}), {})
 
     def test_close_stops_the_server(self):
-        """close() ends the server's process and its log file (9.2.9)."""
+        """close() ends the server's process, its pipes and its log file (9.2.9)."""
         server = self.demo()
         server.close()
         self.assertIsNotNone(server.process.poll())
+        self.assertFalse(server.reader.is_alive())
+        self.assertTrue(server.process.stdin.closed)
+        self.assertTrue(server.process.stdout.closed)
         self.assertTrue(server.log.closed)
         self.assertTrue((self.tmp / "mcp-demo.log").exists())
 

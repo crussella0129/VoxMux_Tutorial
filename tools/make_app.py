@@ -36,10 +36,10 @@ import sys
 import tokenize
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ANSWER_KEY = ROOT / "answer_key_level3"
+ANSWER_KEY = ROOT / "answer_key_level4"
 EXTRAS = ROOT / "tools" / "app_extras"
 TUTORIAL = "crussella0129/VoxMux_Tutorial"
-INPUTS = ["answer_key_level3", "tools", "LICENSE"]
+INPUTS = ["answer_key_level4", "tools", "LICENSE"]
 
 TAG = re.compile(r"\[\d+(?:\.\d+)*\]")
 NOTES = [

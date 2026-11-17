@@ -45,9 +45,11 @@ class MCPServer:
         same libraries the app has. Any other command is found the way a
         terminal would find it, by shutil.which. The server's own error
         output goes to a log file, mcp-<name>.log in the config's folder, so
-        a server that will not start can be looked into. If the opening
-        exchange fails, the server is stopped before the error is passed
-        on, so it is not left running in the background.
+        a server that will not start can be looked into. If the program
+        cannot be started at all, the log file is closed before the error is
+        passed on. If the opening exchange fails, the server is stopped
+        before the error is passed on, so it is not left running in the
+        background.
         """
         self.name = name
         if command == "python":
@@ -59,20 +61,24 @@ class MCPServer:
             environment.update(env)
         log_path = pathlib.Path(folder) / f"mcp-{name}.log"
         self.log = open(log_path, "w", encoding="utf-8")
-        self.process = subprocess.Popen(
-            [program] + list(args),
-            cwd=folder,
-            env=environment,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=self.log,
-            text=True,
-            encoding="utf-8",
-        )
+        try:
+            self.process = subprocess.Popen(
+                [program] + list(args),
+                cwd=folder,
+                env=environment,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=self.log,
+                text=True,
+                encoding="utf-8",
+            )
+        except OSError:
+            self.log.close()
+            raise
         self.lines = queue.Queue()
         self.next_id = 1
-        reader = threading.Thread(target=self.read_lines, daemon=True)
-        reader.start()
+        self.reader = threading.Thread(target=self.read_lines, daemon=True)
+        self.reader.start()
 
         try:
             self.request(
@@ -213,18 +219,27 @@ class MCPServer:
         return text
 
     def close(self):
-        """[9.2.9] Stop the server politely, then close its log file.
+        """[9.2.9] Stop the server politely, then close its pipe and its log file.
 
         How it works: MCP's way to end a conversation over stdin is to close
         the server's stdin. A well-behaved server notices the end of its
         input and exits on its own. It gets five seconds to do that; if it is
-        still running after that, it is killed.
+        still running after that, it is killed. When the server has gone its
+        output ends, so the reader thread finishes, and only then is the
+        output pipe closed: closing a pipe while another thread is waiting
+        to read from it can hang. The reader gets five seconds too. If it is
+        still reading after that, some other program is holding the pipe
+        open, and the pipe is left alone.
         """
         try:
             self.process.stdin.close()
             self.process.wait(timeout=5)
         except Exception:
             self.process.kill()
+            self.process.wait()
+        self.reader.join(timeout=5)
+        if not self.reader.is_alive():
+            self.process.stdout.close()
         self.log.close()
 
 

@@ -401,7 +401,9 @@ Load the 4B model and check:
 
 - Stop is acted on when the next piece of text arrives. While the model is reading a long prompt, summarising old messages, or waiting for a tool, nothing happens until then.
 - A stopped reply stays in the conversation as far as it got. If you stop the model while it is still thinking, that unfinished thinking is what is kept.
-- Conversations are not saved. Closing the window or clicking New chat forgets them.
+- Conversations are not saved. Closing the window or clicking New chat forgets them. Level 4 saves them.
+- Loading a model while another is loaded needs room for both at once, because the first is only let go when the second is ready. With a model that fills the graphics card, the second Load fails with "Error: Failed to load model from file", even when it is the same model. Restart the app to switch. Level 4 lets the first one go first.
+- Only Qwen3.5 models were used to write this level. Level 4 tries seven others and deals with what goes wrong.
 - Settings are saved only when the window is closed normally. If the app crashes, changes made since it started are lost.
 - "Always allow" remembers a tool by its name alone. Any server that offers a tool of that name is trusted, with any arguments. To take a permission back, close the app and remove the name from `"allowed_tools"` in `settings.json`.
 - `settings.json` is trusted to hold the right kinds of value. If you edit it by hand and put text where a number belongs, the app may fail later. Delete the file to start again.
@@ -410,6 +412,6 @@ Load the 4B model and check:
 
 ## Where to go next
 
-The app you have built is the one in [crussella0129/VoxMux](https://github.com/crussella0129/VoxMux). That repository is this answer key with the teaching text removed, made by [`tools/make_app.py`](tools/make_app.py).
+[RECIPE_LEVEL4.md](RECIPE_LEVEL4.md) is level 4: saved conversations, switching models in the middle of a chat, models from families other than Qwen, and MCP servers that will not stop. If you would like to try saving the conversation on your own first, do it before you read level 4.
 
-Good next exercises, in rough order of size: say why Send did nothing when no model is loaded; save the conversation as well as the settings; add a way to take back "Always allow" from the window; show the model's thinking in a different colour; and read tool calls written by a model family other than Qwen.
+Other good exercises, in rough order of size: say why Send did nothing when no model is loaded; add a way to take back "Always allow" from the window; and show the model's thinking in a different colour.

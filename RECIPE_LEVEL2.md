@@ -343,22 +343,24 @@ Parameters: `self`, `name` and `arguments`.
 
 Parameters: `self`, `name`, `command`, `args`, `folder`, and `env` with a default of `None`.
 
-**Docstring:** start with `[9.2.1]`. Say that it starts the server, introduces the client, and lists the tools. Say that the command `"python"` is replaced by `sys.executable`, the Python running the app, so a Python server gets the same libraries; that any other command is found by `shutil.which` the way a terminal would; that the server's error output goes to `mcp-<name>.log` in the config's folder; and that if the opening exchange fails, the server is stopped before the error is passed on.
+**Docstring:** start with `[9.2.1]`. Say that it starts the server, introduces the client, and lists the tools. Say that the command `"python"` is replaced by `sys.executable`, the Python running the app, so a Python server gets the same libraries; that any other command is found by `shutil.which` the way a terminal would; that the server's error output goes to `mcp-<name>.log` in the config's folder; that if the program cannot be started at all, the log file is closed before the error is passed on; and that if the opening exchange fails, the server is stopped before the error is passed on.
 
 1. Store `name` as `self.name`.
 2. `if command == "python":` set `program` to `sys.executable`. `else:` set `program` to `shutil.which(command)`, or, if that gives `None`, to `command` itself. Write that in one line with `or`: `a or b` gives `a` unless `a` counts as false.
 3. Copy the current environment variables: set `environment` to `dict(os.environ)`. Then `if env:` call `environment.update(env)` to add the server's own.
 4. Build the log file's path: `pathlib.Path(folder)` divided by (`/`) an f-string `mcp-` then `name` in braces then `.log`. Store it as `log_path`.
 5. Open it for writing and keep it: set `self.log` to `open(log_path, "w", encoding="utf-8")`.
-6. Start the server: set `self.process` to `subprocess.Popen(...)` with one positional argument and seven keyword arguments, one per line:
+6. Start the server inside a `try:` block: set `self.process` to `subprocess.Popen(...)` with one positional argument and seven keyword arguments, one per line:
    - The command line: a list with `program` in it, plus `list(args)`.
    - `cwd` set to `folder` (the server starts in the config's folder).
    - `env` set to `environment`.
    - `stdin` set to `subprocess.PIPE`, and `stdout` set to `subprocess.PIPE`.
    - `stderr` set to `self.log`.
    - `text` set to `True` (send and receive strings, not bytes), and `encoding` set to `"utf-8"`.
+
+   Then `except OSError:` call `self.log.close()`, then a bare `raise`. `Popen` raises an `OSError` when the program does not exist, and the log file opened in step 5 would otherwise be left open.
 7. Set `self.lines` to a new `queue.Queue()`, and `self.next_id` to `1`.
-8. Create a `threading.Thread` with `target` set to `self.read_lines` and `daemon` set to `True`, store it as `reader`, and start it.
+8. Create a `threading.Thread` with `target` set to `self.read_lines` and `daemon` set to `True`, store it as `self.reader`, and start it. It is kept on `self` because `close` needs it.
 9. Leave a blank line. Open a `try:` block for the opening exchange. Inside it:
    - Call `self.request` with `"initialize"` and a dictionary, laid out one key per line: `"protocolVersion"` set to `PROTOCOL_VERSION`, `"capabilities"` set to an empty dictionary, and `"clientInfo"` set to a dictionary with `"name"` set to `"voxmux"` and `"version"` set to `"1.0"`.
    - Call `self.notify` with `"notifications/initialized"`.
@@ -443,11 +445,15 @@ Parameters: `self`, `name` and `arguments`.
 
 Parameters: just `self`.
 
-**Docstring:** start with `[9.2.9]`. Say that MCP's way to end a conversation over stdin is to close the server's stdin, that a well-behaved server then exits on its own, that it gets five seconds, and that one still running after that is killed.
+**Docstring:** start with `[9.2.9]`, and say on the first line that it stops the server politely, then closes its pipe and its log file. Say that MCP's way to end a conversation over stdin is to close the server's stdin, that a well-behaved server then exits on its own, that it gets five seconds, and that one still running after that is killed. Then explain the pipe: when the server has gone its output ends, so the reader thread finishes, and only then is the output pipe closed, because closing a pipe while another thread is waiting to read from it can hang. The reader gets five seconds too; if it is still reading after that, some other program is holding the pipe open, and the pipe is left alone.
 
 1. A `try:` block: call `self.process.stdin.close()`, then `self.process.wait(timeout=5)`.
-2. `except Exception:` call `self.process.kill()`. `wait` raises an exception if the time runs out.
-3. After that, call `self.log.close()`.
+2. `except Exception:` call `self.process.kill()`, then `self.process.wait()` with no time limit. `wait` with a time limit raises an exception if the time runs out; the second `wait` returns as soon as the killed server has gone.
+3. Call `self.reader.join(timeout=5)`. `join` waits for a thread to finish.
+4. `if not self.reader.is_alive():` call `self.process.stdout.close()`.
+5. After that, call `self.log.close()`.
+
+Without steps 3 and 4 the app still works, but Python closes the pipe for you much later and prints a `ResourceWarning` about an unclosed file if warnings are switched on.
 
 ### 9.3 The function `start_servers`
 
@@ -685,10 +691,13 @@ Load the 4B model. The status line should end with `(262144 tokens of context, 5
 
 ## Adding other MCP servers
 
-Any MCP server that talks over stdin and stdout can go in `mcp_servers.json`, as one more entry next to `"demo"`. Two official ones to try:
+Any MCP server that talks over stdin and stdout can go in `mcp_servers.json`, as one more entry next to `"demo"`. Three official ones to try:
 
-- **Time:** command `"uvx"`, args `["mcp-server-time"]`. Needs `uv`.
-- **Files:** command `"npx"`, args `["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\you\\Documents"]`, with a folder of your own. Needs Node.js. In JSON, a backslash must be written twice.
+- **Time:** command `"uvx"`, args `["mcp-server-time"]`. Needs `uv`. Three tools.
+- **Files:** command `"npx"`, args `["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\you\\Documents"]`, with a folder of your own. Needs Node.js. In JSON, a backslash must be written twice. Sixteen tools, all limited to that folder.
+- **Memory:** command `"npx"`, args `["-y", "@modelcontextprotocol/server-memory"]`. Nine tools that keep a small graph of facts.
+
+All three were run with this client: they start, list their tools, run them, report their own errors as text, and stop when the app closes. So was `@modelcontextprotocol/server-everything`, a server written to exercise clients, including a tool that takes ten seconds and tools that return images and other things that are not text (this client shows those as, for example, `[image content not shown]`).
 
 Each one is downloaded the first time it starts, so the first Load takes longer. If that download takes more than `TIMEOUT_SECONDS` (60), the status line says the server "did not answer initialize"; restart the app to try again once the download has finished. Restart the app after editing the file; servers start only on the first Load. If a server does not start, the status line says so after "MCP problems:", and its `mcp-<name>.log` says why. The time server's tools include its own `get_current_time`; since the demo server's tool has the same name and comes first, the model gets the demo one. Remove `"demo"` to use the official one.
 
@@ -721,7 +730,7 @@ An MCP server runs with your permissions and can do anything you can, so only ad
 - **Troubleshooting table:** each row that describes a coding mistake was checked by making that mistake in a copy of the answer key and running it.
 - **Independent review:** reviewers who had not written the code checked this recipe against the answer key line by line, and copies of level 2 were written from this recipe alone.
 - **Automatic tests:** [`tests/test_level2.py`](tests/test_level2.py) repeats the checks above that need no real model, and runs on GitHub on every change.
-- **Not tested here:** third-party MCP servers. The machine this was written on was not allowed to download and run them, so the "Adding other MCP servers" section is untested. The client follows the published protocol.
+- **Other people's MCP servers:** the client was run against four official servers (time, filesystem, memory and "everything"), started through `uvx` and `npx` as the section above describes. Every tool of each was listed and called, 44 tools in all, and each server stopped cleanly when asked.
 
 ## Known rough edges
 
@@ -732,6 +741,8 @@ An MCP server runs with your permissions and can do anything you can, so only ad
 - Tool results are not shortened, so a tool that returns a whole file can fill the context in one go.
 - Text a tool returns goes straight to the model, which may treat instructions inside it as if you had written them. Be careful with tools that read web pages or other people's files.
 - If the window is closed while the first Load is still starting the servers, they are not stopped by the app; they stop on their own when their input closes as the app exits.
+- A server started through `npx` or `uvx` is not the program the client started: that is a small launcher, and the server is something the launcher started. If such a server ignores the polite request to stop, `kill()` ends only the launcher and the server is left running. Level 4 fixes this.
+- A server is given a copy of all the app's environment variables, which may include passwords and keys set in your terminal.
 - Compaction runs only when the context is completely full. With the maximum context, that may take a very long conversation, and summarising that much at once takes a while.
 
 - MCP tools run without asking you first. Level 3 adds the question.
@@ -741,4 +752,4 @@ Everything in level 1's "Known rough edges" still applies, except that old messa
 
 ## Where to go next
 
-[RECIPE_LEVEL3.md](RECIPE_LEVEL3.md) is level 3: a Stop button, a New chat button, saved settings, and asking before an MCP tool runs.
+[RECIPE_LEVEL3.md](RECIPE_LEVEL3.md) is level 3: a Stop button, a New chat button, saved settings, and asking before an MCP tool runs. [RECIPE_LEVEL4.md](RECIPE_LEVEL4.md) is level 4: saved conversations, models other than Qwen, and servers that will not stop.
