@@ -20,6 +20,7 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,8 +33,16 @@ jobs:
       - name: Lint
         run: python -m ruff check .
       - name: Tests
-        if: runner.os != 'Linux'
+        if: runner.os == 'Windows'
         run: python -m unittest discover -s tests -v
       - name: Tests (a Linux runner has no screen, so xvfb pretends to be one)
         if: runner.os == 'Linux'
         run: xvfb-run -a python -m unittest discover -s tests -v
+      # On a macOS runner the first tkinter window of a run opens and the
+      # second never does, so only the tests that need no window run there.
+      # That still covers the backends, the tools and the MCP client.
+      - name: Tests (macOS, without the ones that open a window)
+        if: runner.os == 'macOS'
+        env:
+          VOXMUX_NO_WINDOW: "1"
+        run: python -m unittest discover -s tests -v

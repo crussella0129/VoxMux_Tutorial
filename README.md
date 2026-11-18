@@ -32,7 +32,7 @@ This runs the tests below on the folder you are writing. It needs no model and n
 python -m unittest discover -s tests
 ```
 
-The tests in [`tests/`](tests/) check all four answer keys in about two minutes. They open the real window and drive it with a scripted stand-in for the model, so they need no graphics card, and they run on GitHub on every change. The tests of the PyTorch backend run only where PyTorch is installed; they use an 80 KB random model in `tests/tiny_model/`.
+The tests in [`tests/`](tests/) check all four answer keys in about two minutes. They open the real window and drive it with a scripted stand-in for the model, so they need no graphics card, and they run on GitHub on every change, on Windows, Linux and macOS. The tests of the PyTorch backend run only where PyTorch is installed; they use an 80 KB random model in `tests/tiny_model/`.
 
 [`tests/real_model.py`](tests/real_model.py) is the one test that needs a real model. Run it by hand: `python tests/real_model.py answer_key_level4 llama_cpp C:\models\Qwen3.5-4B-Q8_0.gguf`. It works with any model: what does not depend on the model is checked strictly, and what does is only reported.
 

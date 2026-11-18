@@ -1,5 +1,7 @@
 """Level 4: other model families, stubborn MCP servers, and saved chats."""
 
+import ctypes
+import importlib.machinery
 import json
 import os
 import subprocess
@@ -259,9 +261,22 @@ class Templates(support.Case):
         backend.knows_tools = False
         self.assertIs(backend.offers_tools(tools), False)
 
-    def load_gguf(self, trained, fits):
-        """Load a pretend .gguf file; return the backend and the sizes tried."""
+    def load_gguf(self, trained, fits, free=()):
+        """Load a pretend .gguf file; return the backend and the sizes tried.
+
+        fits is the largest context the pretend card can load at all. free
+        is what card_free() answers after each load that works, in order;
+        once it runs out the answer is None, "there is no card to ask".
+        The contexts that were closed again are left in self.closed.
+        """
         tried = []
+        closed = self.closed = []
+        answers = list(free)
+
+        def card_free(backend):
+            if answers:
+                return answers.pop(0)
+            return None
 
         class Llama:
             def __init__(self, model_path, vocab_only=False, verbose=True, **more):
@@ -274,6 +289,10 @@ class Templates(support.Case):
                     tried.append(more["n_ctx"])
                     if more["n_ctx"] > fits:
                         raise ValueError("Failed to create llama_context")
+                    self.size = more["n_ctx"]
+
+            def close(self):
+                closed.append(self.size)
 
             def token_eos(self):
                 return 2
@@ -294,8 +313,10 @@ class Templates(support.Case):
         formats.Jinja2ChatFormatter = Formatter
         library.llama_chat_format = formats
         pretend = {"llama_cpp": library, "llama_cpp.llama_chat_format": formats}
+        kind = self.build.backends.LlamaCppBackend
         with mock.patch.dict(sys.modules, pretend):
-            backend = self.build.backends.LlamaCppBackend("C:/models/pretend.gguf")
+            with mock.patch.object(kind, "card_free", card_free):
+                backend = kind("C:/models/pretend.gguf")
         return backend, tried
 
     def test_a_load_never_asks_for_more_than_the_limit(self):
@@ -319,6 +340,193 @@ class Templates(support.Case):
         self.assertEqual(backend.context_size, 8192)
         with self.assertRaisesRegex(ValueError, "llama_context"):
             self.load_gguf(trained=131072, fits=100)
+
+    def test_a_load_that_overflows_the_card_is_halved(self):
+        """A load that leaves the card too little is made again, smaller (19.7)."""
+        reserve = self.build.backends.CARD_RESERVE
+        self.assertEqual(reserve, 512 * 1024 * 1024)
+        answers = [0, reserve - 1, reserve]
+        backend, tried = self.load_gguf(trained=262144, fits=10**9, free=answers)
+        self.assertEqual(tried, [32768, 16384, 8192])
+        self.assertEqual(self.closed, [32768, 16384])
+        self.assertEqual(backend.context_size, 8192)
+        self.assertEqual(backend.llm.size, 8192)
+
+    def test_a_load_with_room_to_spare_is_kept(self):
+        """A load that leaves the reserve free is not made twice (19.7)."""
+        reserve = self.build.backends.CARD_RESERVE
+        backend, tried = self.load_gguf(trained=262144, fits=10**9, free=[reserve * 4])
+        self.assertEqual(tried, [32768])
+        self.assertEqual(self.closed, [])
+        self.assertEqual(backend.context_size, 32768)
+
+    def test_the_smallest_context_is_kept_even_if_it_overflows(self):
+        """Below SMALLEST_CONTEXT there is nothing left to halve (19.7)."""
+        backend, tried = self.load_gguf(trained=8192, fits=10**9, free=[0, 0, 0])
+        self.assertEqual(tried, [8192, 4096])
+        self.assertEqual(self.closed, [8192])
+        self.assertEqual(backend.context_size, 4096)
+        self.assertEqual(backend.llm.size, 4096)
+
+    def test_a_failed_load_and_an_overflowing_one_are_both_halved(self):
+        """The two reasons for halving work one after the other (19.7)."""
+        reserve = self.build.backends.CARD_RESERVE
+        backend, tried = self.load_gguf(trained=131072, fits=20000, free=[0, reserve])
+        self.assertEqual(tried, [32768, 16384, 8192])
+        self.assertEqual(self.closed, [16384])
+        self.assertEqual(backend.context_size, 8192)
+
+    def card_free(self, devices, broken=False):
+        """Call card_free() on a pretend llama_cpp with these (kind, free) devices."""
+        outer = self
+
+        def plain(value):
+            return getattr(value, "value", value)
+
+        def count():
+            return len(devices)
+
+        def get(index):
+            return 0x7FF000000000 + plain(index)
+
+        def kind(device):
+            return devices[plain(device) - 0x7FF000000000][0]
+
+        def memory(device, free, total):
+            outer.assertIs(get.restype, ctypes.c_void_p, "restype was not set")
+            for target, amount in [
+                (free, devices[plain(device) - 0x7FF000000000][1]),
+                (total, 2**34),
+            ]:
+                if hasattr(target, "_obj"):
+                    target._obj.value = amount  # handed over with byref()
+                else:
+                    target.contents.value = amount  # handed over with pointer()
+
+        def load_shared_library(name, path):
+            outer.assertEqual(name, "ggml-base")
+            outer.assertEqual(path, "the lib folder")
+            if broken:
+                raise FileNotFoundError("no such library")
+            return types.SimpleNamespace(
+                ggml_backend_dev_type=kind, ggml_backend_dev_memory=memory
+            )
+
+        get.restype = None
+        library = types.ModuleType("llama_cpp")
+        library._ggml = types.ModuleType("llama_cpp._ggml")
+        library._ggml.libggml = types.SimpleNamespace(
+            ggml_backend_dev_count=count, ggml_backend_dev_get=get
+        )
+        library._ggml.libggml_base_path = "the lib folder"
+        extensions = types.ModuleType("llama_cpp._ctypes_extensions")
+        extensions.load_shared_library = load_shared_library
+        library._ctypes_extensions = extensions
+        pretend = {
+            "llama_cpp": library,
+            "llama_cpp._ggml": library._ggml,
+            "llama_cpp._ctypes_extensions": extensions,
+        }
+        backend = object.__new__(self.build.backends.LlamaCppBackend)
+        with mock.patch.dict(sys.modules, pretend):
+            return backend.card_free()
+
+    def test_card_free_asks_llama_cpp(self):
+        """card_free() gives the free memory of the fullest card (19.10)."""
+        gigabyte = 1024**3
+        self.assertEqual(
+            self.card_free([(0, 30 * gigabyte), (1, 3 * gigabyte)]), 3 * gigabyte
+        )
+        cards = [(1, 5 * gigabyte), (0, gigabyte), (1, 2 * gigabyte), (1, 9 * gigabyte)]
+        self.assertEqual(self.card_free(cards), 2 * gigabyte)
+        self.assertEqual(self.card_free([(1, 0)]), 0)
+
+    def test_card_free_is_none_when_it_cannot_tell(self):
+        """No card, or a llama_cpp laid out differently, gives None (19.10)."""
+        self.assertIsNone(self.card_free([(0, 1024**3)]))
+        self.assertIsNone(self.card_free([]))
+        self.assertIsNone(self.card_free([(1, 1024**3)], broken=True))
+        bare = types.ModuleType("llama_cpp")
+        backend = object.__new__(self.build.backends.LlamaCppBackend)
+        with mock.patch.dict(sys.modules, {"llama_cpp": bare}):
+            for name in ["llama_cpp._ggml", "llama_cpp._ctypes_extensions"]:
+                sys.modules.pop(name, None)
+            self.assertIsNone(backend.card_free())
+
+    def load_pytorch(self, trained, pyarrow=True):
+        """Load a pretend PyTorch model; return the backend and the import order."""
+        order = []
+
+        class Model:
+            config = types.SimpleNamespace(
+                get_text_config=lambda: types.SimpleNamespace(
+                    max_position_embeddings=trained
+                )
+            )
+
+            def to(self, device):
+                self.device = device
+
+        torch = types.ModuleType("torch")
+        torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+        transformers = types.ModuleType("transformers")
+        transformers.AutoTokenizer = types.SimpleNamespace(
+            from_pretrained=lambda path: "a tokenizer"
+        )
+        transformers.AutoModelForCausalLM = types.SimpleNamespace(
+            from_pretrained=lambda path, dtype: Model()
+        )
+        made = {"torch": torch, "transformers": transformers}
+        if pyarrow:
+            made["pyarrow"] = types.ModuleType("pyarrow")
+
+        class Finder:
+            """Hands out the pretend libraries and notes the order they were asked for."""
+
+            def find_spec(self, name, path=None, target=None):
+                if name not in ("pyarrow", "torch", "transformers"):
+                    return None
+                order.append(name)
+                if name not in made:
+                    raise ImportError(f"No module named '{name}'")
+                return importlib.machinery.ModuleSpec(name, self)
+
+            def create_module(self, spec):
+                return made[spec.name]
+
+            def exec_module(self, module):
+                pass
+
+        finder = Finder()
+        with mock.patch.dict(sys.modules):
+            for name in list(sys.modules):
+                if name.split(".")[0] in ("pyarrow", "torch", "transformers"):
+                    del sys.modules[name]
+            sys.meta_path.insert(0, finder)
+            try:
+                backend = self.build.backends.TransformersBackend("C:/models/pretend")
+            finally:
+                sys.meta_path.remove(finder)
+        return backend, order
+
+    def test_a_pytorch_model_is_held_to_the_limit_too(self):
+        """TransformersBackend takes the smaller of the two numbers (19.11)."""
+        backend, order = self.load_pytorch(trained=262144)
+        self.assertEqual(backend.context_size, self.build.backends.LARGEST_CONTEXT)
+        self.assertEqual(backend.tokenizer, "a tokenizer")
+        self.assertEqual(backend.model.device, "cpu")
+        backend, order = self.load_pytorch(trained=2048)
+        self.assertEqual(backend.context_size, 2048)
+
+    def test_pyarrow_is_imported_before_torch(self):
+        """pyarrow goes first if it is there, and is not missed if not (19.11)."""
+        backend, order = self.load_pytorch(trained=2048)
+        self.assertEqual(order[0], "pyarrow", "pyarrow must be imported before torch")
+        self.assertIn("torch", order)
+        self.assertIn("transformers", order)
+        backend, order = self.load_pytorch(trained=2048, pyarrow=False)
+        self.assertEqual(order[0], "pyarrow")
+        self.assertEqual(backend.context_size, 2048)
 
     def test_start_token_is_sent_once(self):
         """llama.cpp is handed tokens with one start-of-text token (19.8)."""
@@ -677,6 +885,7 @@ class SavedChats(support.AppCase):
         self.assertEqual(self.log(), log)
         self.assertEqual(self.roles(), ["user", "assistant"])
         self.assertEqual(self.app.chat_file, path)
+        self.assertTrue(self.status().startswith("Selected: "), self.status())
         self.load()
         self.send("What is my name?")
         self.assertIn("My name is Sam.", self.backend.prompts[-1])
@@ -713,7 +922,7 @@ class SavedChats(support.AppCase):
         self.assertEqual(self.status(), "Selected: C:/models/Some Model")
 
     def test_a_deleted_chat_file_is_not_fatal(self):
-        """The app still starts when the last chat's file has gone (22.7, 22.14)."""
+        """The app starts, and says so, when the last chat has gone (22.7, 22.14)."""
         self.load()
         self.send("hi")
         (path,) = self.chats()
@@ -723,6 +932,7 @@ class SavedChats(support.AppCase):
         self.assertEqual(self.log(), "")
         self.assertEqual(self.app.messages, [])
         self.assertIsNone(self.app.chat_file)
+        self.assertEqual(self.status(), f"Could not open the chat in {path}")
         self.load()
         self.send("hi again")
         self.assertEqual(len(self.chats()), 1)

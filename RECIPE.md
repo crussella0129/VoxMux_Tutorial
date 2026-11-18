@@ -854,8 +854,8 @@ Level 1 leaves a few things undone on purpose. The answer key behaves the same w
 
 - Sending a message before a model is loaded does nothing, with no message to say why.
 - Loading a second model starts a new conversation for the model, but the old messages stay on screen.
-- The app asks for the biggest context the model supports, so llama.cpp can claim most of the graphics card's memory (about 8 GB for the test models). The first model also stays in memory until the second has finished loading. Close and reopen the app to switch models. Level 4 sets a limit on the context and lets the first model go before it loads the second.
-- The PyTorch backend uses the model's full trained context as its limit, but it does not set memory aside up front, so a very long chat can run out of graphics memory before trimming ever starts.
+- The app asks for the biggest context the model supports, so llama.cpp can claim most of the graphics card's memory (about 8 GB for the test models). The first model also stays in memory until the second has finished loading. Close and reopen the app to switch models. Level 4 sets a limit on the context, checks that a load left the card some room, and lets the first model go before it loads the second.
+- The PyTorch backend uses the model's full trained context as its limit, but it does not set memory aside up front, so a very long chat can run out of graphics memory before trimming ever starts. Level 4 holds it to the same limit as a GGUF model.
 - When the conversation outgrows the context, the oldest messages are forgotten for good. They stay on screen, but the model no longer knows them. Level 2 summarises them instead.
 - In thinking mode, small models can keep thinking until they reach `MAX_NEW_TOKENS` without ever answering: the 0.8B and 2B test models did on a simple sum. Their thinking is then kept as the answer.
 - Thinking mode works by setting `enable_thinking` in the chat template and adding your instructions to the system prompt. A model whose template ignores `enable_thinking` only thinks if your instructions persuade it, and its reasoning will not be marked with `[end of thinking]`.

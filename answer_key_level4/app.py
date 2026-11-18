@@ -771,6 +771,9 @@ class ChatApp:
         the rest stay at their starting values. The conversation that was
         open when the app closed is read last, so a settings file from
         level 3, which has no "chat_file", still gives back everything else.
+        The status line is set as soon as the model's path is known and
+        not, as before, at the end, so that a message from read_chat about
+        a conversation it could not open is not written over.
         """
         if not SETTINGS_FILE.exists():
             return
@@ -778,6 +781,8 @@ class ChatApp:
             saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
             self.backend_kind.set(saved["backend_kind"])
             self.model_path = saved["model_path"]
+            if self.model_path:
+                self.status.config(text=f"Selected: {self.model_path}")
             self.temperature.set(saved["temperature"])
             self.thinking.set(saved["thinking"])
             self.thinking_instructions = saved["thinking_instructions"]
@@ -788,8 +793,6 @@ class ChatApp:
                 self.read_chat(saved["chat_file"])
         except (OSError, ValueError, KeyError, TypeError):
             pass
-        if self.model_path:
-            self.status.config(text=f"Selected: {self.model_path}")
 
     def save_settings(self):
         """[22.15] (level 3: [16.16]) Write the current settings to settings.json.

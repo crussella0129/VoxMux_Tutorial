@@ -195,7 +195,14 @@ class AppCase(Case):
         self.addCleanup(setattr, self.module, name, original)
 
     def open(self):
-        """Open the window. Skips the test where there is no screen."""
+        """Open the window. Skips the test where there is no screen.
+
+        It also skips where VOXMUX_NO_WINDOW is set. On GitHub's macOS
+        machines the first window opens and the second, in the same run,
+        never does, so the tests that need no window are run there alone.
+        """
+        if os.environ.get("VOXMUX_NO_WINDOW"):
+            self.skipTest("VOXMUX_NO_WINDOW is set")
         try:
             self.root = tk.Tk()
         except tk.TclError as error:

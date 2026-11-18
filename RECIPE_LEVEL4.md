@@ -5,7 +5,8 @@ Levels 1 to 3 were built and tested with one family of models, Qwen3.5, and one 
 - **Saved conversations.** Each conversation is written to a file of its own after every reply. An Open chat button brings one back, and the one you had open returns when the app starts.
 - **Switching models.** Loading a model no longer clears the conversation, so a second model can carry on where the first left off. The first model is let go before the second loads; until now the two had to fit in memory together, and a second Load could fail for that reason alone.
 - **Models that are not Qwen.** A system prompt now works with a model whose chat template refuses a system message. A model whose template has no place for tools is noticed, and the status line says so. A tool call written as bare JSON, the way Llama 3.2 writes one, is read and run. The start-of-text token is no longer sent twice.
-- **Memory.** A load no longer asks for a model's whole trained context. Newer models claim far more than a graphics card can hold, and on Windows such a load does not fail the way level 1 counted on.
+- **Memory.** A load no longer asks for a model's whole trained context. Newer models claim far more than a graphics card can hold, and on Windows such a load does not fail the way level 1 counted on. So the app now asks, after every load, how much of the card is left, and loads again with half the context if the answer is too little.
+- **A crash that came from somewhere else.** On a computer with pyarrow 24 installed, loading a PyTorch model could end the app without a word. The fault is in pyarrow, and loading it before PyTorch avoids it.
 - **A reply that fails** no longer leaves a question without an answer in the conversation.
 - **Servers that will not stop.** A server started through `npx` or `uvx` is now ended together with its launcher.
 
@@ -28,7 +29,7 @@ New docstrings follow the pattern of the ones you already have: the tag and one 
 | Steps | File | What happens |
 | --- | --- | --- |
 | 18 | | Set up: copy your level 3 folder. |
-| 19 | `backends.py` | Changed: the system prompt for templates that refuse one, a way to ask whether a template describes tools, a limit on the context, one start-of-text token, and giving a model's memory back. |
+| 19 | `backends.py` | Changed: the system prompt for templates that refuse one, a way to ask whether a template describes tools, a limit on the context and a check that a load stayed on the card, one start-of-text token, and giving a model's memory back. |
 | 20 | `tools.py` | Changed: tool calls written as bare JSON are read. |
 | 21 | `mcp_client.py` | Changed: a server that will not stop is ended with everything it started. |
 | 22 | `app.py` | Changed: saved conversations, Open chat, unloading, tools only where the template has them, and taking back a question that failed. |
@@ -47,6 +48,8 @@ Every model file carries its own chat template, the small program that turns a l
 5. **Thinking.** `enable_thinking` is a setting Qwen's template reads. Other templates ignore it. With those, Thinking mode still adds your thinking instructions to the system prompt, and the model thinks aloud in its answer if it follows them. DeepSeek R1 is the opposite case: its template starts every reply with thinking, whether the box is ticked or not. The app shows that thinking and marks its end, as it does for Qwen.
 
 One more difference has nothing to do with templates: **how much context a model claims.** Step 3.3.1 starts each load at the longest context the model was trained for and halves it if the load fails. Mistral 7B was trained for 32,768 tokens. Llama 3.2, Gemma 3, Phi-4-mini and DeepSeek R1 all claim 131,072, and Qwen3.5 claims 262,144. llama.cpp sets memory aside for the whole context when it loads, and at those sizes it is far more than the card has: for Phi-4-mini, llama.cpp reports 4 GB for a context of 32,768 tokens, which makes 16 GB for 131,072, on a card with 11. So the load should fail and be halved until it fits. On Windows it does not fail. A current NVIDIA driver lets a program that has used up the card's memory carry on into the computer's ordinary memory, which the card reaches far more slowly. The load succeeds, with the full number in the status line, and if the ordinary memory runs short as well, llama.cpp stops the whole app with "CUDA error" in the terminal. That happened here with Phi-4-mini. Level 4 never asks for more than 32,768 tokens, and leaves the rest to compaction.
+
+A limit is only a guess at what a card can hold, so level 4 also checks. After a load that works, it asks llama.cpp how much of the card's memory is left. If it is less than half a gigabyte, the load is treated like one that failed: the model is closed and loaded again with half the context. On this card the answer after an overflowing load was 0 every time.
 
 The table in "How this was checked" lists what each model did.
 
@@ -74,6 +77,8 @@ Opening a chat is the reverse: clear the window, put the messages back, write th
 - **`time.strftime(pattern)`** writes the current date and time as text. In the pattern, `%Y` is the year, `%m` the month, `%d` the day, `%H` the hour, `%M` the minute and `%S` the second.
 - **`path.mkdir(exist_ok=True)`** makes a folder, and does nothing if it is already there. **`path.exists()`** says whether a file or folder is there.
 - **`sys.platform`** is a string naming the kind of system Python is running on. On Windows it is `"win32"`.
+- **`importlib.import_module("name")`** imports the module whose name is in the string, as `import name` would. It is a function call, so it can stand inside a `try:` without leaving a name behind that nothing uses.
+- **`ctypes`** is the part of Python that calls functions in libraries written in C. Three things from it are used in step 19.10. `ctypes.c_size_t(5)` and `ctypes.c_void_p(address)` wrap a Python number as the kind of value C expects, a size or an address; an empty `ctypes.c_size_t()` holds 0, and `.value` gives the Python number back. Setting `function.restype` tells Python what kind of value a C function hands back; left unset, Python assumes a small whole number, and an address comes back with half of it missing. And `ctypes.byref(x)` hands a function the way to `x` instead of its value, so that the function can write an answer into it.
 
 ## Step 18: set up
 
@@ -92,9 +97,13 @@ Opening a chat is the reverse: clear the window, put the messages back, write th
 
 *Answer key: `[3.1]` (module docstring, extended).*
 
-In the module docstring, change "(Level 3 version.)" to "(Level 4 version.)". After the paragraph on level 3, add one saying that level 4 makes room for models other than Qwen, whose chat templates differ in three ways that matter here: some refuse a system message, so the system prompt is then folded into the first user message; many say nothing about tools, so there is now a way to ask whether a template describes them; and many write the start-of-text token themselves, which llama.cpp would otherwise add a second time. End the paragraph with two more things: each backend can also give its memory back, so that one model can make way for the next; and a load no longer asks for a model's whole trained context, which for newer models is far more than a graphics card can hold. Then change the docstring's last sentence, the one about the numbers in square brackets, to name RECIPE_LEVEL4.md (19.x) as well.
+In the module docstring, change "(Level 3 version.)" to "(Level 4 version.)". After the paragraph on level 3, add one saying that level 4 makes room for models other than Qwen, whose chat templates differ in three ways that matter here: some refuse a system message, so the system prompt is then folded into the first user message; many say nothing about tools, so there is now a way to ask whether a template describes them; and many write the start-of-text token themselves, which llama.cpp would otherwise add a second time. End the paragraph with three more things: each backend can also give its memory back, so that one model can make way for the next; a load no longer asks for a model's whole trained context, which for newer models is far more than a graphics card can hold; and a load that overflows the card all the same is noticed, and made again with half the context. Then change the docstring's last sentence, the one about the numbers in square brackets, to name RECIPE_LEVEL4.md (19.x) as well.
 
-Then add a constant. Below the two constants from step 3.1, after a blank line, write a comment line starting `# [19.1]` that says this is the most context a load will ever ask for, in tokens. Under it, set `LARGEST_CONTEXT` to the integer `32768`, and leave a blank line before the `# [7.1]` comment as there was before. That is about 25,000 words. If your card has memory to spare and you want longer conversations before compaction starts, this is the number to raise.
+Add two imports above `import threading`, each on a line of its own: `import ctypes`, then `import importlib`.
+
+Then add two constants. Below the two constants from step 3.1, after a blank line, write a comment starting `# [19.1]` that says these are the most context a load will ever ask for, in tokens, and how much of the graphics card's memory a load must leave free, in bytes (512 MB). Under it, set `LARGEST_CONTEXT` to the integer `32768`, and on the next line set `CARD_RESERVE` to `512 * 1024 * 1024`. Leave a blank line before the `# [7.1]` comment as there was before.
+
+32,768 tokens is about 25,000 words. If your card has memory to spare and you want longer conversations before compaction starts, `LARGEST_CONTEXT` is the number to raise: step 19.7 brings a load back down if the card cannot hold it. `CARD_RESERVE` is room for the card to work in. Writing a reply took up to 0.4 GB more than the load itself with the models tried here.
 
 ### 19.2 Change `Backend.fit_to_context`
 
@@ -157,13 +166,21 @@ Parameters: just `self`. Put it in the class `Backend`, after `offers_tools`. It
 
 *Answer key: `[19.7] (level 1: [3.3.1])`.*
 
-One new line. After the line that reads the trained context into `size`, and before the `while True:` loop, set `size` to the smaller of `size` and `LARGEST_CONTEXT`, with `min(...)`. A model trained for less than the limit keeps its own number, and the loop below still halves a context that will not fit.
+Three changes.
 
-Re-tag the docstring. Its first line no longer fits with the longer tag, so shorten it to say that it loads the .gguf file with a context that fits. In the "How it works" paragraph, where it says the real load starts at the longest context the model was trained for, add "or at `LARGEST_CONTEXT` if that is less". Then add a paragraph for level 4: newer models are trained for contexts of 131,072 tokens and more, which no ordinary graphics card can hold; such a load ought to fail and be halved, but on Windows a current NVIDIA driver lets a program that has used up the card carry on into ordinary memory; the load then succeeds with a context the card cannot hold, and if the ordinary memory runs short as well, llama.cpp stops the whole app; starting no higher than `LARGEST_CONTEXT` avoids that, and compaction (step 7) deals with a conversation that outgrows it.
+1. After the line that reads the trained context into `size`, and before the `while True:` loop, set `size` to the smaller of `size` and `LARGEST_CONTEXT`, with `min(...)`. A model trained for less than the limit keeps its own number.
+2. Inside the `try:` block, a lone `break` follows the call to `Llama(...)`: a load that worked was accepted as it was. Replace that `break` with these lines, which look at the card first:
+   - Set `free` to `self.card_free()`, the method you will write in step 19.10.
+   - `if free is None or free >= CARD_RESERVE:` with `break` under it. Either there is no card to ask about, or the load left it enough room.
+   - `if size // 2 < SMALLEST_CONTEXT:` with `break` under it. The card is too full, but there is nothing smaller to try, and a slow model is better than none.
+   - Call `self.llm.close()`. The load did not really fit, so its memory is given back before the next attempt.
+3. In the `except` block, keep the `if` and its `raise`, and delete the line below them that halves `size`. Write that line again after the whole `try`/`except`, at the same indentation as the word `try`: set `size` to `size // 2`. It is the last line of the loop, and it is now reached in two ways: after a load that failed, and after a load that was closed again. Either way the loop goes round with half the context.
+
+The check is what makes level 1's halving work on Windows, where an overflowing load does not fail. Here, with the 4B model and `LARGEST_CONTEXT` raised to 131,072 on purpose, the first load left 0 bytes of the card free. The second, at 65,536, left 1.1 GB, and that is the one the app kept. With the limit at 32,768 the same model leaves 3.6 GB and is loaded once.
+
+Re-tag the docstring. Its first line no longer fits with the longer tag, so shorten it to say that it loads the .gguf file with a context that fits. In the "How it works" paragraph, where it says the real load starts at the longest context the model was trained for, add "or at `LARGEST_CONTEXT` if that is less". Then add a paragraph for level 4: newer models are trained for contexts of 131,072 tokens and more, which no ordinary graphics card can hold; such a load ought to fail and be halved, but on Windows a current NVIDIA driver lets a program that has used up the card carry on into ordinary memory; the load then succeeds with a context the card cannot hold, and if the ordinary memory runs short as well, llama.cpp stops the whole app; starting no higher than `LARGEST_CONTEXT` keeps most loads clear of that, and compaction (step 7) deals with a conversation that outgrows it. Start that paragraph by saying that level 4 adds two things, of which the limit is the first. Then add a paragraph for the second: after every load that succeeds, `card_free()` asks llama.cpp how much of the card's memory is left; if that is less than `CARD_RESERVE`, the load took the card to its edge or past it, so the model is closed and loaded again with half the context, just as if the load had failed; and there is no check when the answer is None, which means there is no card to ask about, or when half the context would be below `SMALLEST_CONTEXT`, because a slow model is better than none.
 
 The class docstring just above, `[3.3]`, says the class loads the weights with as much context as the graphics card can hold. Add "up to LARGEST_CONTEXT" there. Its tag stays as it is.
-
-`TransformersBackend` is left alone. PyTorch sets no memory aside for the context when it loads, so there is nothing to limit there.
 
 ### 19.8 Change `LlamaCppBackend.stream`
 
@@ -186,24 +203,77 @@ Parameters: just `self`. Put it at the end of the class `LlamaCppBackend`, after
 
 1. Call `self.llm.close()`.
 
-### 19.10 New method `TransformersBackend.unload`
+### 19.10 New method `LlamaCppBackend.card_free`
 
 *Answer key: `[19.10]`.*
 
+Parameters: just `self`. Put it at the end of the class `LlamaCppBackend`, after `unload`. It returns the graphics card's free memory in bytes, or `None` if it cannot tell.
+
+llama.cpp knows how much memory the card has left, but the `llama_cpp` package has no function that passes the answer on. So this method fetches it from llama.cpp's own two libraries, the files named `ggml` and `ggml-base` in the package's `lib` folder, with `ctypes` (see "Python syntax you will meet"). Four C functions are used:
+
+- `ggml_backend_dev_count()` returns the number of devices llama.cpp can run on. The processor counts as one of them.
+- `ggml_backend_dev_get(index)` returns one device, as an address.
+- `ggml_backend_dev_type(device)` returns the kind of device as a number. 0 is the processor.
+- `ggml_backend_dev_memory(device, free, total)` writes two numbers of bytes into the two variables it is shown the way to.
+
+**Docstring:** start with `[19.10]`. Say that it returns the graphics card's free memory in bytes, or None. Explain that llama.cpp keeps a list of the devices it can run on and can say how much memory each has left, but llama_cpp passes on neither, so the two libraries that can are called directly, with ctypes, Python's way of calling functions written in C. Explain that C does not say what kind of value it is handed or hands back, so the code has to: restype says that the function giving out a device returns an address, and every value handed over is wrapped in the kind C expects; and that the memory function gives its two answers by writing them into variables it is shown the way to, which is what byref() does. Add that devices of kind 0 are the processor and are skipped, that with more than one card the smallest answer is the one that matters, and that if any of this fails, for example because this copy of llama_cpp is laid out differently, the answer is None and the caller carries on without the check.
+
+The whole body is one `try:` block. Inside it:
+
+1. Two imports, followed by a blank line: `from llama_cpp import _ggml`, and `from llama_cpp._ctypes_extensions import load_shared_library`. Both names start with an underscore, which is the package's way of saying that they are its own business and may change. `install.py` asks for one exact version of `llama_cpp`, and the `try:` covers the day that changes.
+2. Set `devices` to `_ggml.libggml`. That is the `ggml` library, which the package has already loaded. The first two functions are in it.
+3. Set `details` to `load_shared_library("ggml-base", _ggml.libggml_base_path)`. That loads the second library from the same folder. The other two functions are in it.
+4. Set `devices.ggml_backend_dev_get.restype` to `ctypes.c_void_p`.
+5. Set `least` to `None`.
+6. Loop with `for index in range(devices.ggml_backend_dev_count()):`. Inside the loop:
+   - Set `found` to `devices.ggml_backend_dev_get(ctypes.c_size_t(index))`.
+   - Set `device` to `ctypes.c_void_p(found)`: the address, wrapped again so that it can be handed back to C whole.
+   - `if details.ggml_backend_dev_type(device) == 0:` with `continue` under it. The processor is not a graphics card.
+   - Set `free` to `ctypes.c_size_t()`, and `total` to `ctypes.c_size_t()`.
+   - Call `details.ggml_backend_dev_memory(...)` with three arguments: `device`, `ctypes.byref(free)` and `ctypes.byref(total)`. The call is too long for one line; put the three arguments on a line of their own between the brackets.
+   - `if least is None or free.value < least:` set `least` to `free.value`.
+7. After the loop, still inside the `try:`, return `least`. It is still `None` if the list held no graphics card.
+
+Then, at the indentation of `try:`, write `except Exception:` and under it return `None`.
+
+`total` is never read. The function writes both numbers whether you want them or not, so it has to be given somewhere to put the second. And the smallest answer is kept because llama.cpp spreads a model over all the cards it finds, and the fullest one is the first to overflow.
+
+Leave step 4 out and the method still runs, and always answers `None`: the cut-off address makes the next call fail, and the `except` hides it. The check in step 19.7 then never happens. `check_my_build.py` looks for that line for this reason.
+
+### 19.11 Change `TransformersBackend.__init__`
+
+*Answer key: `[19.11] (level 1: [3.4.1])`.*
+
+Two changes that have nothing to do with each other.
+
+1. Make these four lines the first lines of the method's body, above `import torch`: `try:`, under it `importlib.import_module("pyarrow")`, then `except ImportError:` with `pass` under it.
+2. In the method's last line, set `self.context_size` to the smaller of `text_config.max_position_embeddings` and `LARGEST_CONTEXT`, with `min(...)`.
+
+The first change is for a fault that is not in this app. `transformers` imports pandas if pandas is installed, and pandas imports pyarrow, so on many computers pyarrow is loaded the moment a PyTorch model is. Version 24 of pyarrow for Windows needs one of the 64 quick slots that Windows gives a program for storage that each thread keeps to itself. Importing torch takes every slot that is left. Loaded after that, pyarrow carries on with a slot number it cannot use, and reads and writes memory that belongs to something else. Often nothing comes of it. Sometimes Python ends at once, with no message or with `Segmentation fault`, while the model loads or shortly after. Loaded before torch, pyarrow gets a slot that works. The app has no use for pyarrow itself, and on a computer without it the import raises `ImportError` and nothing is lost. "How this was checked" has the whole story.
+
+The second change gives PyTorch models the limit that GGUF models got in step 19.7. PyTorch sets no memory aside for the context when it loads, so nothing can overflow at that moment; the memory goes as the conversation grows. With the limit, compaction starts before a long conversation has used the card up. The status line now says `32768 tokens of context` for the 2B model, where it said `262144`.
+
+Re-tag the docstring. Its first line no longer fits with the longer tag, so shorten it to say that it loads the tokenizer and the model. Keep the "How it works" paragraph and add two paragraphs for level 4. The first: the number is held down to `LARGEST_CONTEXT`, as it is for a GGUF model; PyTorch sets no memory aside for the context when it loads, so nothing can overflow here, and the memory goes as the conversation grows; the limit is what makes compaction start before a long conversation has used the card up. The second: pyarrow is imported before anything else, if it is installed; the app has no use for it, but transformers loads it, by way of pandas, whenever it is there; Windows gives a program 64 quick slots for per-thread storage, importing torch takes all that are left, and version 24 of pyarrow, loaded after that, carries on with a slot it cannot use and can stop the whole app without a word; loaded first, it gets a slot that works; and `import_module()` is import with the name given as a string, which raises ImportError on a computer without pyarrow, where nothing is lost.
+
+### 19.12 New method `TransformersBackend.unload`
+
+*Answer key: `[19.12]`.*
+
 Parameters: just `self`. Put it at the end of the class `TransformersBackend`, after `stream`.
 
-**Docstring:** start with `[19.10]`. Say that it gives the model's memory back to the graphics card. Explain that Python frees an object once nothing refers to it, so letting go of the model is enough to free its weights; and that PyTorch keeps the freed graphics memory for itself, ready for its next use, so `empty_cache()` hands it back, and llama.cpp can have it if a GGUF model is loaded next.
+**Docstring:** start with `[19.12]`. Say that it gives the model's memory back to the graphics card. Explain that Python frees an object once nothing refers to it, so letting go of the model is enough to free its weights; and that PyTorch keeps the freed graphics memory for itself, ready for its next use, so `empty_cache()` hands it back, and llama.cpp can have it if a GGUF model is loaded next.
 
 1. `import torch`, inside the method like this class's other imports, followed by a blank line.
 2. Set `self.model` to `None`.
 3. Call `torch.cuda.empty_cache()`. On a machine with no graphics card it does nothing.
 
-### 19.11 Checkpoint: test it without a window
+### 19.13 Checkpoint: test it without a window
 
 From inside `my_build_level4/`, start the Python prompt and load a GGUF model as in step 3.6, keeping the backend in a variable. Then:
 
 1. Import `Toolbox` from `tools`, make one with an empty list of servers, and call `.offers_tools(...)` on your backend with the toolbox's `.schemas`. A Qwen3.5 model gives `True`.
-2. Open Task Manager's Performance tab and watch the graphics card's dedicated memory. Call `.unload()` on your backend. The memory falls back to where it was before you loaded the model.
+2. Print the backend's `.card_free()` divided by `1024 ** 3`. It is the card's free memory in gigabytes: a few, with the 4B model loaded on an 11 GB card. If it prints `None` on a computer with a graphics card, go back over step 19.10.
+3. Open Task Manager's Performance tab and watch the graphics card's dedicated memory. Call `.unload()` on your backend. The memory falls back to where it was before you loaded the model.
 
 ## Step 20: `tools.py`, changed
 
@@ -490,10 +560,13 @@ Re-tag the docstring and add Open chat to the buttons that follow `busy`.
 *Answer key: `[22.14] (level 3: [16.15])`.*
 
 1. Inside the `try:` block, after the line that reads `"allowed_tools"`, add: `if saved["chat_file"]:` call `self.read_chat(saved["chat_file"])`.
+2. Move the two lines that end the method, `if self.model_path:` and the line under it that sets the status text to "Selected: ...". Put them inside the `try:` block, straight after the line that sets `self.model_path`, indented to match. Nothing is left after the `except` and its `pass`.
 
-It is the last thing read on purpose. A settings file written by level 3 has no `"chat_file"`, so that line raises `KeyError`, which the `except` already catches, and every setting read before it is kept.
+The conversation is the last thing read on purpose. A settings file written by level 3 has no `"chat_file"`, so that line raises `KeyError`, which the `except` already catches, and every setting read before it is kept.
 
-Re-tag the docstring, shortening its first line to say that it reads settings.json back into the window. Add that the conversation that was open when the app closed is read last, so a settings file from level 3, which has no "chat_file", still gives back everything else.
+The status line moves because `read_chat` may have something to say. If the conversation's file has been deleted, it writes "Could not open the chat in ..." to the status line, and in its old place the "Selected: ..." message would be written over that at once.
+
+Re-tag the docstring, shortening its first line to say that it reads settings.json back into the window. Add that the conversation that was open when the app closed is read last, so a settings file from level 3, which has no "chat_file", still gives back everything else; and that the status line is set as soon as the model's path is known and not, as before, at the end, so that a message from read_chat about a conversation it could not open is not written over.
 
 ### 22.15 Change `save_settings`
 
@@ -527,8 +600,8 @@ Load the 4B model. The status line says `32768 tokens of context`, where level 3
 1. **Saving.** Tell the model your name. When the reply finishes, a folder named `chats` appears next to `app.py`, with one file in it named after the date and time. Open the file and read it: your message and the reply are under `"messages"`, and the text on screen is under `"log"`.
 2. **A new file for a new chat.** Click New chat and say something else. A second file appears, and the first is untouched.
 3. **Open chat.** Click Open chat..., pick the first file, and ask "What is my name?" The log shows the first conversation, and the model knows.
-4. **Coming back.** Close the app and start it again. The conversation is on screen before you load anything. Load the model and carry on.
-5. **Switching models.** With the conversation still on screen, click Load again. In levels 1 to 3 this failed with "Failed to load model from file" for a model that fills the card. Now it loads, and the conversation is still there. Then pick the 2B PyTorch model and load that: it answers a question about the same conversation.
+4. **Coming back.** Close the app and start it again. The conversation is on screen before you load anything. Load the model and carry on. (If you delete that conversation's file from `chats` while the app is closed, the app starts with an empty window and the status line says `Could not open the chat in ...`.)
+5. **Switching models.** With the conversation still on screen, click Load again. In levels 1 to 3 this failed with "Failed to load model from file" for a model that fills the card. Now it loads, and the conversation is still there. Then pick the 2B PyTorch model and load that: it answers a question about the same conversation, and its status line says `32768 tokens of context` too.
 6. **Tools as before.** "What is 1234 * 5678? Use the calculator." and "Save a note that says: buy oat milk." behave as in level 3.
 
 If you have a model from another family, load it and check:
@@ -576,10 +649,18 @@ Step 2 of [RECIPE.md](RECIPE.md) has the download command; these are the files t
 | `check_my_build.py` fails on "a launcher and its server are both stopped" | `close` still calls `self.process.kill()` where it should call `self.stop_tree()`. | `[21.3]` |
 | On Linux, the same test never finishes, and the app hangs on closing when a server will not stop | `Popen` was not given `start_new_session=True`. The server then has no group of its own for `os.killpg` to end, and `close` waits for it for good. | `[21.2]` |
 | With Llama 3.2 or Phi-4-mini the status line says `131072 tokens of context`, and with Phi-4-mini the app may vanish, leaving `CUDA error` in the terminal | `__init__` does not hold `size` down to `LARGEST_CONTEXT`: the `min(...)` line is missing. | `[19.7]` |
+| Every GGUF model takes four times as long to load and ends with `4096 tokens of context` | The test of `free` in `__init__` is the wrong way round. It must `break` when `free` is at least `CARD_RESERVE`. | `[19.7]` |
+| Load never finishes for a model that overflows the card, and the card's memory in Task Manager goes up and down | `size = size // 2` is still inside the `except` block, so a load that was closed again is repeated at the same size for ever. It belongs after the `try`/`except`. | `[19.7]` |
+| A model that overflows the card gets "Error: Failed to load model from file" where it should load with less context | `__init__` does not call `self.llm.close()` before it goes round again, so the second load is made with the first still on the card. | `[19.7]` |
+| A model that overflows the card keeps its full context, and `card_free()` prints `None` in step 19.13 | In `card_free`, `restype` was not set for `ggml_backend_dev_get`. The address comes back cut short, the next call fails, and the `except` hides it. | `[19.10]` |
+| With the 2B PyTorch model the status line says `262144 tokens of context` | `TransformersBackend.__init__` does not hold the context down to `LARGEST_CONTEXT`. | `[19.11]` |
+| On a computer with pyarrow 24 installed, the app sometimes vanishes while a PyTorch model loads or just after, with nothing in the terminal or just `Segmentation fault` | `TransformersBackend.__init__` imports `torch` before pyarrow, or does not import pyarrow at all. `pip show pyarrow` says whether and which version you have. | `[19.11]` |
+| Loading a PyTorch model fails with `Error: No module named 'pyarrow'` | The import of pyarrow has no `try:` around it. A computer without pyarrow must be able to do without. | `[19.11]` |
+| After you delete the last conversation's file, the app starts with an empty window and the status line says "Selected: ..." with no word about the chat | `load_settings` still sets the status text at its end, over what `read_chat` wrote. | `[22.14]` |
 
 ## How this was checked
 
-- **Automatic tests.** Everything in this level is covered by [`tests/test_level4.py`](tests/test_level4.py): 117 tests, which include all of the earlier levels' tests run against the level 4 answer key. The new ones use real replies that Llama 3.2 wrote, a stand-in for a template that refuses a system message, a stand-in for llama.cpp that records what context each load asked for, and a server that ignores every polite request to stop, started through a launcher the way `npx` starts one. `python check_my_build.py` runs the same tests on your copy.
+- **Automatic tests.** Everything in this level is covered by [`tests/test_level4.py`](tests/test_level4.py): 125 tests, which include all of the earlier levels' tests run against the level 4 answer key. The new ones use real replies that Llama 3.2 wrote, a stand-in for a template that refuses a system message, a stand-in for llama.cpp that records what context each load asked for and is told how much of the card each load left, pretend copies of torch, transformers and pyarrow that record the order they were imported in, and a server that ignores every polite request to stop, started through a launcher the way `npx` starts one. On GitHub the tests run on Windows and on Linux in full, and on macOS without the ones that open a window (see the rough edges). `python check_my_build.py` runs the same tests on your copy.
 - **Real models.** The answer key was driven through its real window by [`tests/real_model.py`](tests/real_model.py) with each model below, on Windows 11 with an 11 GB RTX 2080 Ti. The script stops a long reply, saves and reopens a chat, loads the model a second time in the middle of a conversation, uses the calculator and the demo server's tools where the template offers tools, shrinks the context to force a summary, and restarts the app to see the conversation come back. Every model passed every check that does not depend on what the model chooses to say. "Memory" is what the card gave up when the model loaded with a context of 32,768 tokens.
 
   | Model | File | Tools in its template | Memory | What it did |
@@ -596,12 +677,15 @@ Step 2 of [RECIPE.md](RECIPE.md) has the download command; these are the files t
   | SmolLM2 360M | `HuggingFaceTB/SmolLM2-360M-Instruct`, PyTorch | no | not set aside | Chatted. Its summary did not survive either, and it could not recall a name from early in the conversation. |
 
   The 4B checks were also run with the different Q8 build of Qwen3.5 4B that levels 1 to 3 were tested with, with the same result. With the four models that used to be sent two start-of-text tokens, llama.cpp printed no warning about it in any run.
-- **One thing that was not explained.** In the full pass, the two PyTorch models each ended once with a segmentation fault while their weights were loading, before the app had been asked for anything. Both passed when run again, and nine further loads of the 2B model did not repeat it. The cause was not found.
+
+  Two things were added to this level after those runs: the check on the card's memory and the import of pyarrow. The three Qwen3.5 models, the switching and the servers below were then run again, with the same results. The six downloaded GGUF files and SmolLM2 had been deleted by then and were not.
+- **The check on the card's memory** was tried with the 4B model and `LARGEST_CONTEXT` raised on purpose. At 131,072 the first load left 0 bytes of the card free, the app closed it, and the second, at 65,536, left 1.1 GB and was kept; the whole thing took 8 seconds. At 262,144 it took three loads to arrive at the same place. The 0.8B model fits at 262,144 with 1.6 GB to spare and was loaded once. Loads made by hand at sizes in between showed the answer falling steadily as the card filled: 630 MB left at 73,728 tokens, 327 MB at 77,824, 102 MB at 81,920 and nothing at 86,016, where Windows began putting the model into ordinary memory.
+- **A crash that was not this app's.** In the full pass, the two PyTorch models each ended once with a segmentation fault, with no message, and passed when run again. The cause was found later. `transformers` imports pandas if it is installed, and pandas imports pyarrow. pyarrow 24.0.0 for Windows brings its own memory allocator, which needs one of the 64 quick slots Windows gives a program for per-thread storage. Importing torch takes every slot that is left. Loaded after that, the allocator is handed a slot number past the 64, uses it as if it were one of them, and so reads and writes memory that belongs to something else. What comes of that depends on the exact number it was given, which is why it happened only now and then. Windows had a record of eight earlier crashes of Python on this computer, all at one address inside pyarrow's `arrow.dll`, two of them while this app loaded a PyTorch model. It was then made to happen every time: with between one and ten slots taken before the app's two imports, Python died at that same address, and with none or with eleven or more it did not. With pyarrow imported first, as step 19.11 now does, it did not die with any number of slots tried, from none to fifty. The two crashes in the full pass left no record of their own, so they are put down to this fault by what they have in common with it: only the PyTorch runs load pyarrow, and they ended the same way.
 - **Switching models** was run through the window with the 4B GGUF and the 2B PyTorch model: GGUF, the same GGUF again, PyTorch, GGUF, PyTorch, PyTorch. Every load worked, and each model answered a question about something said to the one before. The card's memory in use went from 7.1 GB with the GGUF model loaded to 4.4 GB with the PyTorch model loaded in its place, so the first had been let go.
 - **MCP servers written by other people.** The client was run directly against four official servers: `mcp-server-time` through `uvx`, and `@modelcontextprotocol/server-filesystem`, `server-memory` and `server-everything` through `npx`. All four started, listed their tools (44 between them) and answered calls. The app was then run with the time and filesystem servers and the 4B model: the status line showed 21 tools, the model looked up the time in Tokyo, wrote a file and listed a folder, each after the approval window, and a request for a file outside the server's folder was refused by the server. Nine programs were running behind those two servers. After the window closed, none was left.
-- **A server that will not stop** is in the automatic tests on Windows. The same test was run by hand on Linux, under WSL: level 4 ended the launcher and its server, and level 3's `close` left the server running.
-- **This document.** Twice, a copy of level 4 was written from this recipe alone, starting from the level 3 answer key and without sight of the level 4 answer key or the tests. The second time was after the last change to the steps. Apart from docstrings and comments its code was identical to the answer key. The places where each writer had to make a choice were then spelled out.
-- **Troubleshooting table:** each row was checked by making that mistake in a copy of the answer key and running it. `check_my_build.py` failed on every one of them, apart from the Linux row, where it waits for ever.
+- **A server that will not stop** is in the automatic tests, so it is tried on Windows, Linux and macOS on every change, and level 4 ends the launcher and its server on all three. On Linux, level 3's `close` left the server running; that was tried by hand, under WSL.
+- **This document.** Three times, a copy of level 4 was written from this recipe alone, starting from the level 3 answer key and without sight of the level 4 answer key or the tests. The third time was after the last change to the steps. Apart from docstrings and comments its code was identical to the answer key each time. The places where each writer had to make a choice were then spelled out.
+- **Troubleshooting table:** each row was checked by making that mistake in a copy of the answer key and running it. `check_my_build.py` failed on every one of them, apart from the Linux row, where it waits for ever. For the rows about the card's memory, the mistake was also run with the real 4B model, to see what the row says you see.
 
 ## Known rough edges
 
@@ -613,17 +697,19 @@ Step 2 of [RECIPE.md](RECIPE.md) has the download command; these are the files t
 - Thinking mode can only be switched on and off for Qwen. DeepSeek R1 always thinks, and a small model that thinks can take minutes over a summary, during which Stop does nothing (see level 3's list).
 - Chats are only ever added. There is no way to delete or rename one from the app; use File Explorer. A chat is named by its date and time, not by what it was about.
 - A chat file is trusted in the same way as `settings.json`. One that has been edited by hand into the wrong shape may fail later, not when it is opened.
-- If the chat that was open last time has been deleted, the app starts with an empty window. The "Could not open the chat" message is written to the status line but replaced at once by "Selected: ..." if a model path was saved, so you do not see it.
 - A conversation in which tools were used cannot always be carried on with a model whose template has no place for tools. Gemma 3's template refuses the tool messages already in such a conversation. The reply then fails, and the question is taken back.
 - A reply that fails is marked in the log, but the chat file is not rewritten until the next reply that works.
 - A load that fails now leaves no model loaded, where levels 1 to 3 kept the old one.
-- **The context limit is one number for every card.** With `LARGEST_CONTEXT` at 32,768, the largest load here, Mistral 7B, took 9.1 GB of the card's 11. On a smaller card, or with a larger model, 32,768 tokens can still be too much. On Linux such a load fails and is halved, as step 3.3.1 intends. On Windows with a current NVIDIA driver it succeeds and spills into ordinary memory, as described above. If the status line shows the full 32,768 and Task Manager shows the card's "Shared GPU memory" in use, lower `LARGEST_CONTEXT`. NVIDIA Control Panel also has a setting for this, "CUDA - Sysmem Fallback Policy"; it was not tried here.
-- `TransformersBackend` has no limit of this kind. It still takes the model's whole trained context as its size, as level 1's list says.
-- `stop_tree`'s branch for Linux and macOS was run on Linux only, under WSL.
+- **The check on the card's memory uses parts of `llama_cpp` that are not meant for outsiders.** `card_free` works with version 0.3.36, the one `install.py` asks for. With another version it may answer `None`. The app then runs as it did before the check, and on Windows an overflowing load is kept. The check was run with a real model on one card, an NVIDIA one on Windows.
+- A model that is too big for the card at any context is loaded four times, at 32,768, 16,384, 8,192 and 4,096 tokens, before the app settles for the last. Every one of those loads overflows.
+- `CARD_RESERVE` is one number, 512 MB, and the card is looked at only once, straight after the load. A program that takes the card's memory later is not noticed.
+- Mistral 7B, the largest model tried, was run before the check existed. At 32,768 tokens it left about 0.7 GB of the card, which is more than the reserve, so the check should leave it alone. That was not run again to see.
+- The import of pyarrow before torch protects a program that has not imported torch already, which is always so for this app. It was tried with pyarrow 24.0.0, the version that has the fault.
+- The window was run on Windows and, by the automatic tests, on Linux. On macOS only the parts that need no window were run. On GitHub's macOS machines the tests stop for good when a second window is opened in one run, and why was not found out.
 - Everything in the earlier levels' lists still applies, except the items this level fixes: conversations are saved, a second model can be loaded without restarting, a message that got no answer does not stay in the conversation, and other people's models and MCP servers have been tried.
 
 ## Where to go next
 
 The app you have built is the one in [crussella0129/VoxMux](https://github.com/crussella0129/VoxMux). That repository is this answer key with the teaching text removed, made by [`tools/make_app.py`](tools/make_app.py).
 
-Good next exercises, in rough order of size: say why Send did nothing when no model is loaded; add a way to take back "Always allow" from the window; show the model's thinking in a different colour; give each saved chat a title from its first message; and choose the context size from the graphics card's free memory instead of from one fixed number.
+Good next exercises, in rough order of size: say why Send did nothing when no model is loaded; add a way to take back "Always allow" from the window; show the model's thinking in a different colour; and give each saved chat a title from its first message.

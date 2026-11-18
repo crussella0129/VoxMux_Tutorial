@@ -31,20 +31,26 @@ many write the start-of-text token themselves, which llama.cpp would
 otherwise add a second time. Each backend can also give its memory back,
 so that one model can make way for the next. And a load no longer asks
 for a model's whole trained context, which for newer models is far more
-than a graphics card can hold.
+than a graphics card can hold. A load that overflows the card all the
+same is noticed, and made again with half the context.
 
 The numbers in square brackets match the step numbers in RECIPE.md (3.x),
 RECIPE_LEVEL2.md (7.x), RECIPE_LEVEL3.md (15.x) and RECIPE_LEVEL4.md (19.x).
 """
 
+import ctypes
+import importlib
 import threading
 
 # [3.1] Constants: the settings the backends use.
 MAX_NEW_TOKENS = 4096  # the longest reply a model may write, in tokens
 SMALLEST_CONTEXT = 4096  # give up loading if not even this much context fits
 
-# [19.1] Constant: the most context a load will ever ask for, in tokens.
+# [19.1] Constants: the most context a load will ever ask for, in tokens,
+# and how much of the graphics card's memory a load must leave free, in
+# bytes (512 MB).
 LARGEST_CONTEXT = 32768
+CARD_RESERVE = 512 * 1024 * 1024
 
 # [7.1] Constant: what the model is told when it summarises old messages.
 SUMMARY_INSTRUCTIONS = (
@@ -234,15 +240,24 @@ class LlamaCppBackend(Backend):
         as long as half is not below SMALLEST_CONTEXT. Any other kind of
         failure, such as a file that is not a model, is passed straight on.
 
-        Level 4 adds the upper limit. Newer models are trained for contexts
-        of 131,072 tokens and more, which no ordinary graphics card can
-        hold. Such a load ought to fail and be halved, but on Windows a
-        current NVIDIA driver lets a program that has used up the card carry
-        on into ordinary memory. The load then succeeds with a context the
-        card cannot hold, and if the ordinary memory runs short as well,
-        llama.cpp stops the whole app. Starting no higher than
-        LARGEST_CONTEXT avoids that, and compaction (step 7) deals with a
-        conversation that outgrows it.
+        Level 4 adds two things. The first is the upper limit. Newer models
+        are trained for contexts of 131,072 tokens and more, which no
+        ordinary graphics card can hold. Such a load ought to fail and be
+        halved, but on Windows a current NVIDIA driver lets a program that
+        has used up the card carry on into ordinary memory. The load then
+        succeeds with a context the card cannot hold, and if the ordinary
+        memory runs short as well, llama.cpp stops the whole app. Starting
+        no higher than LARGEST_CONTEXT keeps most loads clear of that, and
+        compaction (step 7) deals with a conversation that outgrows it.
+
+        The second is a check after every load that succeeds. card_free()
+        asks llama.cpp how much of the card's memory is left. If that is
+        less than CARD_RESERVE, the load took the card to its edge or past
+        it, so the model is closed and loaded again with half the context,
+        just as if the load had failed. There is no check when the answer
+        is None, which means there is no card to ask about, or when half
+        the context would be below SMALLEST_CONTEXT: a slow model is
+        better than none.
         """
         # Imported here, not at the top of the file, so the app still starts
         # if only one of the two libraries is installed.
@@ -262,11 +277,16 @@ class LlamaCppBackend(Backend):
                     n_gpu_layers=-1,  # -1 means "put every layer on the GPU"
                     verbose=False,  # do not print pages of loading logs
                 )
-                break
+                free = self.card_free()
+                if free is None or free >= CARD_RESERVE:
+                    break
+                if size // 2 < SMALLEST_CONTEXT:
+                    break
+                self.llm.close()
             except ValueError as error:
                 if "llama_context" not in str(error) or size // 2 < SMALLEST_CONTEXT:
                     raise
-                size = size // 2
+            size = size // 2
         self.context_size = size
 
         end_token = info.detokenize([info.token_eos()], special=True)
@@ -346,6 +366,48 @@ class LlamaCppBackend(Backend):
         """
         self.llm.close()
 
+    def card_free(self):
+        """[19.10] Return the graphics card's free memory in bytes, or None.
+
+        How it works: llama.cpp keeps a list of the devices it can run on
+        and can say how much memory each has left, but llama_cpp passes on
+        neither. So the two libraries that can are called directly, with
+        ctypes, Python's way of calling functions written in C. C does not
+        say what kind of value it is handed or hands back, so the code has
+        to: restype says that the function giving out a device returns an
+        address (c_void_p), and every value handed over is wrapped in the
+        kind C expects. The memory function gives its two answers by
+        writing them into variables it is shown the way to, which is what
+        byref() does. Devices of kind 0 are the processor and are skipped.
+        With more than one card, the smallest answer is the one that
+        matters. If any of this fails, for example because this copy of
+        llama_cpp is laid out differently, the answer is None, and the
+        caller carries on without the check.
+        """
+        try:
+            from llama_cpp import _ggml
+            from llama_cpp._ctypes_extensions import load_shared_library
+
+            devices = _ggml.libggml
+            details = load_shared_library("ggml-base", _ggml.libggml_base_path)
+            devices.ggml_backend_dev_get.restype = ctypes.c_void_p
+            least = None
+            for index in range(devices.ggml_backend_dev_count()):
+                found = devices.ggml_backend_dev_get(ctypes.c_size_t(index))
+                device = ctypes.c_void_p(found)
+                if details.ggml_backend_dev_type(device) == 0:
+                    continue
+                free = ctypes.c_size_t()
+                total = ctypes.c_size_t()
+                details.ggml_backend_dev_memory(
+                    device, ctypes.byref(free), ctypes.byref(total)
+                )
+                if least is None or free.value < least:
+                    least = free.value
+            return least
+        except Exception:
+            return None
+
 
 class TransformersBackend(Backend):
     """[3.4] Runs a folder of safetensors weights through PyTorch.
@@ -357,14 +419,34 @@ class TransformersBackend(Backend):
     """
 
     def __init__(self, model_path):
-        """[3.4.1] Load the tokenizer and the model from the folder model_path.
+        """[19.11] (level 1: [3.4.1]) Load the tokenizer and the model.
 
         How it works: from_pretrained reads config.json in the folder to find
         out what kind of model it is, then loads the matching weights. The
         model is moved to the graphics card if there is one, because
         generating on a CPU is far slower. The longest context the model was
         trained for is read from the same config.
+
+        Level 4 holds that number down to LARGEST_CONTEXT, as it does for
+        a GGUF model. PyTorch sets no memory aside for the context when it
+        loads, so nothing can overflow here; the memory goes as the
+        conversation grows. The limit is what makes compaction start
+        before a long conversation has used the card up.
+
+        Level 4 also imports pyarrow before anything else, if it is
+        installed. The app has no use for it, but transformers loads it
+        (by way of pandas) whenever it is there. Windows gives a program
+        64 quick slots for per-thread storage, importing torch takes all
+        that are left, and version 24 of pyarrow, loaded after that,
+        carries on with a slot it cannot use and can stop the whole app
+        without a word. Loaded first, it gets a slot that works.
+        import_module() is import with the name given as a string; a
+        computer without pyarrow raises ImportError, and nothing is lost.
         """
+        try:
+            importlib.import_module("pyarrow")
+        except ImportError:
+            pass
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -378,7 +460,7 @@ class TransformersBackend(Backend):
         self.model.to(self.device)
 
         text_config = self.model.config.get_text_config()
-        self.context_size = text_config.max_position_embeddings
+        self.context_size = min(text_config.max_position_embeddings, LARGEST_CONTEXT)
 
     def build_prompt(self, messages, thinking, tools=None):
         """[7.8] (level 1: [3.4.2]) Turn messages into one prompt string.
@@ -484,7 +566,7 @@ class TransformersBackend(Backend):
             raise failures[0]
 
     def unload(self):
-        """[19.10] Give the model's memory back to the graphics card.
+        """[19.12] Give the model's memory back to the graphics card.
 
         How it works: Python frees an object once nothing refers to it, so
         letting go of the model is enough to free its weights. PyTorch
