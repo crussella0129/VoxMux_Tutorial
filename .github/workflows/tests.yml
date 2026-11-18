@@ -1,7 +1,9 @@
 name: Tests
 
 # None of this needs a graphics card or a model. The tests drive the real
-# tkinter window with a scripted stand-in for the model.
+# tkinter window with a scripted stand-in for the model. They run on all
+# three systems because some of the code differs between them: how a
+# stubborn MCP server is stopped, for one.
 
 on:
   push:
@@ -13,7 +15,11 @@ permissions:
 
 jobs:
   tests:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,4 +32,8 @@ jobs:
       - name: Lint
         run: python -m ruff check .
       - name: Tests
+        if: runner.os != 'Linux'
         run: python -m unittest discover -s tests -v
+      - name: Tests (a Linux runner has no screen, so xvfb pretends to be one)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m unittest discover -s tests -v
